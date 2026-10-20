@@ -222,7 +222,10 @@ function renderScene() {
             m,
             r: recordFor(m, region)
         }));
-        const active = rows.find(row => phase(row.r) === 'processing') || rows.find(row => phase(row.r) === 'candidate') || rows.find(row => phase(row.r) === 'error') || rows[0];
+        // Keep the mask undecided until all models reject the region. Individual
+        // model badges retain their own decisions when the models disagree.
+        const priorities = ['processing', 'candidate', 'uncertain', 'queued', 'error', 'untested', 'preview', 'negative'];
+        const active = priorities.map(state => rows.find(row => phase(row.r) === state)).find(Boolean) || rows[0];
         const maxText = Math.max(...rows.map(({
             i,
             m,
@@ -249,6 +252,7 @@ function renderScene() {
 }
 
 function renderControls() {
+    $('mask-legend').hidden = !S.image;
     $('start-button').hidden = busy();
     $('start-button').disabled = busy() || !S.image || !S.models.length || !S.catalogReady || !S.referenceReady;
     $('stop-button').hidden = !busy();
@@ -269,7 +273,7 @@ function renderControls() {
     const incomplete = done.some(r => r.usage?.cost == null);
     const reviewed = Object.keys(S.run?.review?.labels || {}).length;
     const status = S.loading ? 'Starting…' : S.run?.status || 'Ready';
-    $('run-status').textContent = status === 'stopping' ? 'Stopping…' : status[0].toUpperCase() + status.slice(1);
+    $('run-status').textContent = `${S.run?.source === 'replay' ? 'Replay · ' : ''}${status === 'stopping' ? 'Stopping…' : status[0].toUpperCase() + status.slice(1)}`;
     $('stats').textContent = S.run ? `${done.length} calls · ${active} running · ${candidates} candidates · ${reviewed} reviewed${errors?` · ${errors} errors`:''} · $${cost.toFixed(5)}${incomplete?' + unreported':''}` : `${$('strategy').value==='grid'?`${$('tiles').value} regions`:'Binary'} · ${S.models.length} models · ${$('concurrency').value} parallel`;
     $('stats').title = $('stats').textContent;
 }

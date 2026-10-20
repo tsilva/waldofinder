@@ -24,8 +24,13 @@ uses `auto`. It includes:
   configurable from 1 to 64 in the UI. Free slots are filled immediately, including
   newly discovered binary children, without waiting for slow sibling requests.
 - The entire scene fits the viewport without page scrolling. Each region shows
-  every selected model's live state and decision directly on the image. Binary
-  branches can differ between models; an upward arrow marks a decision inherited
+  every selected model's live state and decision directly on the image.
+  Translucent masks cover each region: yellow while running, red when discarded,
+  green for candidates, and blue for queued or uncertain regions
+  still under consideration. Running calls take mask priority; a region is red
+  only when all selected models reject it. Per-model badges keep individual
+  decisions visible. Binary branches can differ between models; an upward arrow
+  marks a decision inherited
   from a larger parent crop. Click a model's status to inspect its actual crop.
 - A compact toolbar for configuration, upload, history, export and Run/Stop.
   Configuration and crop review open in dialogs, leaving the scene unobstructed.
@@ -252,6 +257,12 @@ trial. The standalone `experiments/image_detail.py` helper writes an interactive
 box-overlay review; `--live` enables paid calls. That controlled crop experiment
 kept app defaults unchanged at the time; new live searches now explicitly request
 `original` search-image detail as documented above.
+The [original-detail full-search comparison](../reports/2026-10-20-original-detail-searches.md)
+repeats the entire grid and binary searches five times each with Gemini. Both
+found the confirmed target in 5/5 runs; each returned an extra candidate in two
+runs. Grid averaged 48.55 seconds and $0.16788; binary averaged 72.80 seconds and
+$0.13383. The report separates first-candidate latency from full completion,
+records individual runs, and explains the remaining close-lookalike errors.
 
 ## Development
 

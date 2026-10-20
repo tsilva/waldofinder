@@ -52,7 +52,9 @@ and the selected provider and incur API charges.
 ## Compare and review
 
 - **Watch models search together.** Each region shows every selected model's
-  live state and decision. The catalog accepts 2026 image-input, text-output
+  live state and decision, with yellow running masks, red discarded masks and
+  green candidate masks; blue marks regions still under consideration.
+  The catalog accepts 2026 image-input, text-output
   models; availability depends on the provider.
 - **Inspect the evidence.** Open a crop to see the prediction and reason.
   **Present**, **Absent**, and **Unsure** save your judgment independently;
