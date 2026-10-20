@@ -140,11 +140,12 @@ def test_run_events_and_separate_durable_review(app):
             app.review(state["id"], {"target": point})
 
 
-def test_legacy_models_cannot_start_or_replay(app):
-    app.catalog = CATALOG | {
-        "old/model": CATALOG[MODEL] | {"id": "old/model", "created": 1700000000}
-    }
-    app.catalog_at = 0
+def test_legacy_models_cannot_start_or_replay(app, monkeypatch):
+    # A fresh runner may have less than five minutes of monotonic uptime.
+    monkeypatch.setattr("waldofinder.dashboard.time.monotonic", lambda: 1)
+    app.model_loader = lambda: (
+        CATALOG | {"old/model": CATALOG[MODEL] | {"id": "old/model", "created": 1700000000}}
+    )
     assert [m["id"] for m in app.models()] == [MODEL]
     with pytest.raises(DashboardError, match="2026"):
         app.start(payload() | {"models": ["old/model"]})
