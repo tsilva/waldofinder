@@ -1,0 +1,23 @@
+{
+  "name": "waldofinder",
+  "short_name": "waldofinder",
+  "icons": [
+    {
+      "src": "android-chrome-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "android-chrome-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "theme_color": "#11151a",
+  "background_color": "#11151a",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/"
+}

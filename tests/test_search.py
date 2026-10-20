@@ -3,7 +3,7 @@ from PIL import Image
 
 from waldofinder.provider import ProviderError
 from waldofinder.report import write_report
-from waldofinder.search import search
+from waldofinder.search import search, search_models
 
 CONFIG = dict(
     strategy="binary",
@@ -52,7 +52,7 @@ def test_false_negatives_pruned_or_explored(tmp_path):
 def test_positive_refines_and_stops_with_untested_regions(tmp_path):
     result = search(Image.new("RGB", (80, 60)), "test", Fake(), CONFIG, tmp_path)
     assert result["stop_reason"] == "candidate_found"
-    assert result["requests"] == 8
+    assert 3 <= result["requests"] < 14
     assert all(
         o["region"]["depth"] == 3
         for o in result["observations"]
@@ -64,7 +64,11 @@ def test_positive_refines_and_stops_with_untested_regions(tmp_path):
 @pytest.mark.parametrize("cap", [1, 3, 5])
 def test_budget_is_hard_even_when_concurrent(tmp_path, cap):
     result = search(
-        Image.new("RGB", (80, 60)), "test", Fake(), {**CONFIG, "max_requests": cap}, tmp_path
+        Image.new("RGB", (80, 60)),
+        "test",
+        Fake(),
+        {**CONFIG, "max_requests": cap, "all_candidates": True},
+        tmp_path,
     )
     assert result["requests"] == cap and result["stop_reason"] == "request_limit"
     assert result["untested"]
@@ -123,3 +127,122 @@ def test_partial_grid_reports_budget_not_binary_early_stop(tmp_path):
     )
     assert result["stop_reason"] == "request_limit"
     assert result["requests"] == 3 and len(result["untested"]) == 4
+
+
+def test_models_share_the_pool_and_global_limit(tmp_path):
+    import threading
+
+    lock = threading.Lock()
+    first_pair = threading.Barrier(2, timeout=3)
+    entered, active, peak = [], 0, 0
+
+    class Concurrent(Fake):
+        def classify(self, model, image):
+            nonlocal active, peak
+            with lock:
+                entered.append(model)
+                position = len(entered)
+                active += 1
+                peak = max(peak, active)
+            try:
+                if position <= 2:
+                    first_pair.wait()
+                return super().classify(model, image)
+            finally:
+                with lock:
+                    active -= 1
+
+    results = search_models(
+        Image.new("RGB", (80, 60)),
+        ["a", "b"],
+        Concurrent(),
+        {**CONFIG, "strategy": "grid", "tiles": 7, "max_requests": 3},
+        tmp_path,
+    )
+    assert set(entered[:2]) == {"a", "b"}
+    assert peak == 2
+    assert [r["requests"] for r in results] == [3, 3]
+    assert all(r["stop_reason"] == "request_limit" for r in results)
+
+
+def test_binary_refills_without_waiting_for_slow_sibling(tmp_path):
+    import threading
+
+    child_started = threading.Event()
+    count, lock = 0, threading.Lock()
+
+    class SlowSibling(Fake):
+        def classify(self, model, image):
+            nonlocal count
+            with lock:
+                count += 1
+                position = count
+            if position == 2:
+                assert child_started.wait(3), "A slow sibling blocked newly discovered work"
+            elif position > 2:
+                child_started.set()
+            return super().classify(model, image)
+
+    result = search(
+        Image.new("RGB", (80, 60)), "a", SlowSibling(), {**CONFIG, "all_candidates": True}, tmp_path
+    )
+    assert child_started.is_set()
+    assert result["requests"] == 14
+
+
+def test_cancel_drains_calls_and_does_not_submit_more(tmp_path):
+    import threading
+
+    cancel = threading.Event()
+    pair = threading.Barrier(2, timeout=3)
+
+    class Cancel(Fake):
+        def classify(self, model, image):
+            pair.wait()
+            cancel.set()
+            return super().classify(model, image)
+
+    results = search_models(
+        Image.new("RGB", (80, 60)),
+        ["a", "b"],
+        Cancel(),
+        {**CONFIG, "strategy": "grid", "tiles": 9},
+        tmp_path,
+        cancel=cancel,
+    )
+    assert sum(r["requests"] for r in results) == 2
+    assert all(r["stop_reason"] == "cancelled" for r in results)
+    assert all(len(r["untested"]) == 8 for r in results)
+
+
+def test_out_of_order_model_checkpoint_keeps_correct_artifacts(tmp_path):
+    import threading
+
+    second_checkpoint = threading.Event()
+    image = Image.new("RGB", (80, 60))
+    order = []
+
+    class OutOfOrder(Fake):
+        def classify(self, model, crop):
+            if model == "slow":
+                assert second_checkpoint.wait(3)
+            return super().classify(model, crop)
+
+    def checkpoint(index, summary):
+        order.append(index)
+        write_report(image, {"models": [summary]}, tmp_path)
+        assert (tmp_path / f"model-{index:02d}" / "annotated.png").is_file()
+        if index == 1:
+            assert not (tmp_path / "model-00" / "annotated.png").exists()
+            second_checkpoint.set()
+
+    results = search_models(
+        image,
+        ["slow", "fast"],
+        OutOfOrder(),
+        {**CONFIG, "strategy": "grid", "tiles": 1},
+        tmp_path,
+        on_model_finished=checkpoint,
+    )
+    assert order == [1, 0]
+    assert [r["artifact_dir"] for r in results] == ["model-00", "model-01"]

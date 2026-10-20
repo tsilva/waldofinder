@@ -29,7 +29,8 @@ def write_report(image, result, output):
                 stroke_width=1,
                 stroke_fill="white",
             )
-        name = f"model-{index:02d}/annotated.png"
+        artifact_dir = model.get("artifact_dir", f"model-{index:02d}")
+        name = f"{artifact_dir}/annotated.png"
         annotated.save(output / name)
         model["annotation"] = name
         usages = [o.get("usage", {}) for o in model["observations"]]
@@ -38,6 +39,13 @@ def write_report(image, result, output):
         model["cost_complete"] = len(costs) > 0 and all(isinstance(c, (int, float)) for c in costs)
         model["prompt_tokens"] = sum(u.get("prompt_tokens", 0) or 0 for u in usages)
         model["completion_tokens"] = sum(u.get("completion_tokens", 0) or 0 for u in usages)
+        reasoning = [
+            (u.get("completion_tokens_details") or {}).get("reasoning_tokens") for u in usages
+        ]
+        model["reported_reasoning_tokens"] = sum(n for n in reasoning if type(n) is int)
+        model["reasoning_tokens_complete"] = bool(reasoning) and all(
+            type(n) is int for n in reasoning
+        )
     (output / "results.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     fields = [
         "model",
@@ -48,6 +56,8 @@ def write_report(image, result, output):
         "cost_complete",
         "prompt_tokens",
         "completion_tokens",
+        "reported_reasoning_tokens",
+        "reasoning_tokens_complete",
         "stop_reason",
     ]
     with (output / "summary.csv").open("w", newline="") as file:

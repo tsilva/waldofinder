@@ -14,9 +14,19 @@ from PIL import Image, ImageOps
 from . import __version__
 from .credentials import CredentialError
 from .geometry import Region, grid
-from .provider import PROMPT, OpenRouter, public_models
+from .provider import (
+    IMAGE_DETAIL,
+    PROMPT,
+    PROMPT_VERSION,
+    REASONING_EFFORTS,
+    REFERENCE_DETAIL,
+    OpenRouter,
+    public_models,
+    supports_effort,
+)
+from .reference import DEFAULT_REFERENCE
 from .report import write_report
-from .search import search
+from .search import search_models
 
 
 def parser():
@@ -25,6 +35,7 @@ def parser():
     commands.add_parser("models", help="List 2026 OpenRouter vision models")
     ui = commands.add_parser("serve", help="Open the local live experiment dashboard")
     ui.add_argument("--port", default="auto")
+    ui.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
     ui.add_argument("--image", type=Path, default=Path("data/beach.png"))
     ui.add_argument("--runs-dir", type=Path, default=Path("runs"))
     ui.add_argument("--auth", choices=("agent-vault", "infisical"), default="agent-vault")
@@ -55,20 +66,29 @@ def parser():
         p.add_argument(
             "--model", action="append", required=True, help="Repeat for independent comparisons"
         )
-        p.add_argument("--concurrency", type=int, default=4)
+        p.add_argument(
+            "--concurrency", type=int, default=32, help="Global concurrent API call limit"
+        )
         p.add_argument(
             "--max-requests",
             type=int,
             default=64,
             help="Hard API attempt cap PER MODEL; no retries",
         )
+        p.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
         p.add_argument("--threshold", type=float, default=0.7)
         p.add_argument("--all-candidates", action="store_true")
         p.add_argument(
             "--explore-negatives", action="store_true", help="Split even confident negatives"
         )
         p.add_argument("--timeout", type=float, default=90)
-        p.add_argument("--max-tokens", type=int, default=2048)
+        p.add_argument(
+            "--max-tokens",
+            type=int,
+            default=2048,
+            help="Combined reasoning and final-answer token cap",
+        )
+        p.add_argument("--reasoning-effort", choices=REASONING_EFFORTS, default="low")
         p.add_argument(
             "--structured", action="store_true", help="Require native JSON schema support"
         )
@@ -130,6 +150,7 @@ def execute(args):
             "all_candidates",
             "explore_negatives",
             "max_tokens",
+            "reasoning_effort",
             "timeout",
             "structured",
         )
@@ -144,6 +165,10 @@ def execute(args):
         for model in args.model:
             if model not in models:
                 raise ValueError(f"Not a current image-input, text-output model: {model}")
+            if args.reasoning_effort != "low" and not supports_effort(
+                models[model], args.reasoning_effort
+            ):
+                raise ValueError(f"Model does not support requested reasoning effort: {model}")
             params = models[model].get("supported_parameters", [])
             if args.structured and "structured_outputs" not in params:
                 raise ValueError(f"Model does not advertise structured outputs: {model}")
@@ -171,8 +196,13 @@ def execute(args):
                 manifest.append({"id": region.id, "box": region.box, "crop_box": box})
             (output / "regions.json").write_text(json.dumps(manifest, indent=2) + "\n")
         else:
+            (output / "reference.png").write_bytes(provider.reference.png)
             result = {
                 "version": __version__,
+                "prompt_version": PROMPT_VERSION,
+                "reference": provider.reference.manifest,
+                "image_detail": IMAGE_DETAIL,
+                "reference_detail": REFERENCE_DETAIL,
                 "created_at": datetime.now(UTC).isoformat(),
                 "image_sha256": hashlib.sha256(raw).hexdigest(),
                 "image_size": image.size,
@@ -180,20 +210,22 @@ def execute(args):
                 "prompt": PROMPT,
                 "models": [],
             }
-            for index, model in enumerate(args.model):
-                folder = output / f"model-{index:02d}"
-                folder.mkdir()
-                found = search(image, model, provider, config, folder)
+            completed = {}
+
+            def checkpoint(index, found):
+                model = args.model[index]
                 found["released"] = (
                     datetime.fromtimestamp(models[model]["created"], UTC).date().isoformat()
                 )
-                found["artifact_dir"] = f"model-{index:02d}"
-                result["models"].append(found)
+                completed[index] = found
+                result["models"] = [completed[i] for i in sorted(completed)]
                 write_report(image, result, output)
                 print(
                     f"{model}: {found['requests']} requests, {found['errors']} errors, "
                     f"{len(found['candidates'])} candidate regions ({found['stop_reason']})"
                 )
+
+            search_models(image, args.model, provider, config, output, on_model_finished=checkpoint)
             print(f"Results: {output.resolve()}")
             return 2 if any(m["errors"] for m in result["models"]) else 0
     finally:

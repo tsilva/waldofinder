@@ -8,8 +8,27 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .dashboard import TERMINAL, Dashboard, DashboardError
+from .provider import IMAGE_DETAIL, PROMPT, PROMPT_VERSION, REFERENCE_DETAIL
 
 STATIC = Path(__file__).parent / "static"
+STATIC_FILES = {
+    "/": "index.html",
+    "/app.js": "app.js",
+    "/style.css": "style.css",
+    "/favicon.ico": "brand/favicon.ico",
+    **{
+        f"/brand/{name}": f"brand/{name}"
+        for name in (
+            "favicon.ico",
+            "favicon-32.png",
+            "apple-touch-icon.png",
+            "android-chrome-192.png",
+            "android-chrome-512.png",
+            "og-image-1200x630.png",
+            "site.webmanifest",
+        )
+    },
+}
 
 
 class Server(ThreadingHTTPServer):
@@ -88,9 +107,18 @@ class Handler(BaseHTTPRequestHandler):
             sample = None
             if app.sample and app.sample.is_file():
                 sample = app.image_info("sample")
+            try:
+                reference = app.reference().manifest | {"url": "/api/reference"}
+            except DashboardError:
+                reference = None
             self.json(
                 {
                     "token": self.server.token,
+                    "reference": reference,
+                    "prompt": PROMPT,
+                    "prompt_version": PROMPT_VERSION,
+                    "image_detail": IMAGE_DETAIL,
+                    "reference_detail": REFERENCE_DETAIL,
                     "sample": sample,
                     "history": app.history(),
                     "auth": "Infisical Agent Vault"
@@ -99,6 +127,10 @@ class Handler(BaseHTTPRequestHandler):
                     "replay_available": app.sample_run() is not None,
                 }
             )
+        elif url.path == "/api/reference":
+            raw = app.reference().png
+            self.headers_for(200, "image/png", len(raw))
+            self.wfile.write(raw)
         elif url.path == "/api/models":
             self.json({"models": app.models()})
         elif url.path == "/api/runs":
@@ -157,13 +189,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(raw)
             else:
                 raise DashboardError("Not found.", 404)
-        elif url.path in ("/", "/app.js", "/style.css"):
-            path = STATIC / ("index.html" if url.path == "/" else url.path[1:])
+        elif url.path in STATIC_FILES:
+            path = STATIC / STATIC_FILES[url.path]
             raw = path.read_bytes()
-            self.headers_for(200, mimetypes.guess_type(path.name)[0] or "text/plain", len(raw))
+            content_type = (
+                "application/manifest+json"
+                if path.suffix == ".webmanifest"
+                else mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            )
+            self.headers_for(200, content_type, len(raw))
             self.wfile.write(raw)
-        elif url.path == "/favicon.ico":
-            self.headers_for(204, "image/x-icon", 0)
         else:
             raise DashboardError("Not found.", 404)
 

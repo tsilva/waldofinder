@@ -16,3 +16,19 @@ def test_offline_preview_and_refuse_overwrite(tmp_path):
 
     with pytest.raises(FileExistsError):
         execute(args)
+
+
+def test_cli_exposes_reasoning_effort():
+    args = parser().parse_args(
+        [
+            "run",
+            "scene.png",
+            "--model",
+            "test",
+            "--reasoning-effort",
+            "high",
+            "--max-tokens",
+            "8192",
+        ]
+    )
+    assert args.reasoning_effort == "high" and args.max_tokens == 8192

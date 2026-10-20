@@ -19,9 +19,20 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from . import __version__
 from .geometry import Region, grid
-from .provider import PROMPT, OpenRouter, model_is_2026, public_models
+from .provider import (
+    IMAGE_DETAIL,
+    PROMPT,
+    PROMPT_VERSION,
+    REASONING_EFFORTS,
+    REFERENCE_DETAIL,
+    OpenRouter,
+    model_is_2026,
+    public_models,
+    supports_effort,
+)
+from .reference import DEFAULT_REFERENCE, load_reference
 from .report import write_report
-from .search import search
+from .search import search_models
 
 DEFAULTS = dict(
     strategy="grid",
@@ -30,12 +41,13 @@ DEFAULTS = dict(
     overlap=0.08,
     max_depth=4,
     min_size=64,
-    concurrency=4,
+    concurrency=32,
     max_requests=32,
     threshold=0.7,
     all_candidates=False,
     explore_negatives=False,
     max_tokens=2048,
+    reasoning_effort="low",
     timeout=90,
     structured=True,
 )
@@ -70,9 +82,9 @@ def validate_config(payload):
         tiles=(1, 256),
         max_depth=(1, 10),
         min_size=(1, 4096),
-        concurrency=(1, 8),
+        concurrency=(1, 64),
         max_requests=(1, 256),
-        max_tokens=(64, 8192),
+        max_tokens=(64, 32768),
     )
     for key, (minimum, maximum) in limits.items():
         value = config[key]
@@ -91,6 +103,8 @@ def validate_config(payload):
     for key in ("all_candidates", "explore_negatives", "structured"):
         if type(config[key]) is not bool:
             raise DashboardError(f"Invalid {key}.")
+    if config["reasoning_effort"] not in REASONING_EFFORTS:
+        raise DashboardError("Choose low, medium or high reasoning effort.")
     if config["strategy"] not in ("grid", "binary"):
         raise DashboardError("Choose grid or binary search.")
     if config["columns"] is not None and (
@@ -190,9 +204,18 @@ class Dashboard:
                     "name": row.get("name", name),
                     "structured": "structured_outputs" in row.get("supported_parameters", []),
                     "released": datetime.fromtimestamp(row["created"], UTC).date().isoformat(),
+                    "reasoning_efforts": [
+                        effort for effort in REASONING_EFFORTS if supports_effort(row, effort)
+                    ],
                 }
                 for name, row in sorted(self.catalog.items())
             ]
+
+    def reference(self):
+        try:
+            return load_reference(getattr(self.args, "reference", DEFAULT_REFERENCE))
+        except ValueError as error:
+            raise DashboardError(str(error)) from None
 
     def image(self, image_id):
         if image_id == "sample" and self.sample and self.sample.is_file():
@@ -268,6 +291,14 @@ class Dashboard:
             try:
                 if (folder / "session.json").is_file():
                     state = json.loads((folder / "session.json").read_text())
+                    # Older session snapshots stored the prompt only in results.json.
+                    if "prompt" not in state:
+                        try:
+                            recorded = json.loads((folder / "results.json").read_text())
+                        except (OSError, ValueError):
+                            recorded = {}
+                        for key in ("prompt", "prompt_version", "reference"):
+                            state.setdefault(key, recorded.get(key))
                     if state["status"] not in TERMINAL:
                         state["status"] = "interrupted"
                         state["error"] = (
@@ -291,6 +322,11 @@ class Dashboard:
                         },
                         models=[],
                         image_sha256=result["image_sha256"],
+                        prompt=result.get("prompt"),
+                        prompt_version=result.get("prompt_version"),
+                        reference=result.get("reference"),
+                        image_detail=result.get("image_detail", "auto"),
+                        reference_detail=result.get("reference_detail", "auto"),
                     )
                     for index, model in enumerate(result["models"]):
                         regions = {}
@@ -339,7 +375,18 @@ class Dashboard:
                 rows.append(
                     {
                         k: state.get(k)
-                        for k in ("id", "status", "source", "created_at", "config", "image")
+                        for k in (
+                            "id",
+                            "status",
+                            "source",
+                            "created_at",
+                            "config",
+                            "image",
+                            "prompt_version",
+                            "reference",
+                            "image_detail",
+                            "reference_detail",
+                        )
                     }
                     | {"models": [m["model"] for m in state["models"]]}
                 )
@@ -395,9 +442,22 @@ class Dashboard:
                     raise DashboardError(
                         "A selected model does not advertise structured output support."
                     )
+            if (
+                not replay
+                and config["reasoning_effort"] != "low"
+                and any(
+                    not supports_effort(self.catalog[m], config["reasoning_effort"]) for m in models
+                )
+            ):
+                raise DashboardError("A selected model does not support this reasoning effort.")
+            reference = self.reference() if not replay else None
             run_id = f"web-{uuid4().hex}"
             folder = self.root / run_id
             folder.mkdir()
+            if reference:
+                (folder / "reference.png").write_bytes(reference.png)
+            elif source and (source.folder / "reference.png").is_file():
+                shutil.copyfile(source.folder / "reference.png", folder / "reference.png")
             raw = image_path.read_bytes()
             with Image.open(BytesIO(raw)) as loaded:
                 image = ImageOps.exif_transpose(loaded).convert("RGB")
@@ -409,6 +469,13 @@ class Dashboard:
                 source="replay" if replay else "live",
                 created_at=now(),
                 config=config,
+                prompt=original.get("prompt") if replay else PROMPT,
+                prompt_version=original.get("prompt_version") if replay else PROMPT_VERSION,
+                reference=original.get("reference") if replay else reference.manifest,
+                image_detail=original.get("image_detail", "auto") if replay else IMAGE_DETAIL,
+                reference_detail=original.get("reference_detail", "auto")
+                if replay
+                else REFERENCE_DETAIL,
                 image_sha256=hashlib.sha256(raw).hexdigest(),
                 image={
                     "id": f"run:{run_id}",
@@ -450,7 +517,12 @@ class Dashboard:
             args = type(
                 "Settings",
                 (),
-                {**vars(self.args), **session.state["config"], "model_capabilities": self.catalog},
+                {
+                    **vars(self.args),
+                    **session.state["config"],
+                    "model_capabilities": self.catalog,
+                    "reference": session.folder / "reference.png",
+                },
             )()
             provider = self.provider_factory(args)
             state = session.snapshot()
@@ -460,33 +532,34 @@ class Dashboard:
                 image_sha256=state["image_sha256"],
                 image_size=[state["image"]["width"], state["image"]["height"]],
                 config=state["config"],
-                prompt=PROMPT,
+                prompt=state["prompt"],
+                prompt_version=state["prompt_version"],
+                reference=state["reference"],
+                image_detail=state["image_detail"],
+                reference_detail=state["reference_detail"],
                 models=[],
             )
             session.emit("run_started")
             with Image.open(session.folder / "input.png") as image:
-                image.load()  # Decode once before crop workers share the immutable source.
-                for index, model in enumerate(state["models"]):
-                    if session.cancel.is_set():
-                        break
-                    session.emit("model_started", {"model_index": index})
-                    folder = session.folder / f"model-{index:02d}"
-                    folder.mkdir()
-                    summary = search(
-                        image,
-                        model["model"],
-                        provider,
-                        state["config"],
-                        folder,
-                        on_event=lambda kind, value, i=index: session.emit(
-                            kind, {**value, "model_index": i}
-                        ),
-                        cancel=session.cancel,
-                    )
-                    summary["artifact_dir"] = folder.name
-                    result["models"].append(summary)
+                image.load()
+                completed = {}
+
+                def checkpoint(index, summary):
+                    summary["released"] = state["models"][index].get("released")
+                    completed[index] = summary
+                    result["models"] = [completed[i] for i in sorted(completed)]
                     write_report(image, result, session.folder)
-                    session.emit("model_finished", {"model_index": index, "summary": summary})
+
+                search_models(
+                    image,
+                    [m["model"] for m in state["models"]],
+                    provider,
+                    state["config"],
+                    session.folder,
+                    on_event=session.emit,
+                    cancel=session.cancel,
+                    on_model_finished=checkpoint,
+                )
             session.emit(
                 "run_finished", {"status": "cancelled" if session.cancel.is_set() else "completed"}
             )
