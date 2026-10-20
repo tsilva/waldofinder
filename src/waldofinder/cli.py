@@ -22,7 +22,18 @@ from .search import search
 def parser():
     root = argparse.ArgumentParser(description="Compare VLMs on regional Waldo detection.")
     commands = root.add_subparsers(dest="command", required=True)
-    commands.add_parser("models", help="List current OpenRouter image-input, text-output models")
+    commands.add_parser("models", help="List 2026 OpenRouter vision models")
+    ui = commands.add_parser("serve", help="Open the local live experiment dashboard")
+    ui.add_argument("--port", default="auto")
+    ui.add_argument("--image", type=Path, default=Path("data/beach.png"))
+    ui.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    ui.add_argument("--auth", choices=("agent-vault", "infisical"), default="agent-vault")
+    ui.add_argument("--vault-config", type=Path, default=Path("~/.config/agentbridge/.env"))
+    ui.add_argument("--infisical-project")
+    ui.add_argument("--infisical-env", default="dev")
+    ui.add_argument("--infisical-path", default="/")
+    ui.add_argument("--infisical-secret", default="OPENROUTER_API_KEY")
+    ui.add_argument("--infisical-domain", default="https://app.infisical.com")
     for name in ("run", "preview"):
         p = commands.add_parser(
             name, help="Run paid requests" if name == "run" else "Export crops offline"
@@ -57,7 +68,7 @@ def parser():
             "--explore-negatives", action="store_true", help="Split even confident negatives"
         )
         p.add_argument("--timeout", type=float, default=90)
-        p.add_argument("--max-tokens", type=int, default=512)
+        p.add_argument("--max-tokens", type=int, default=2048)
         p.add_argument(
             "--structured", action="store_true", help="Require native JSON schema support"
         )
@@ -87,6 +98,10 @@ def validate(args):
 
 
 def execute(args):
+    if args.command == "serve":
+        from .web import serve
+
+        return serve(args)
     if args.command == "models":
         for name, model in sorted(public_models().items()):
             print(
@@ -132,6 +147,7 @@ def execute(args):
             params = models[model].get("supported_parameters", [])
             if args.structured and "structured_outputs" not in params:
                 raise ValueError(f"Model does not advertise structured outputs: {model}")
+        args.model_capabilities = models
         provider = OpenRouter(args)
     output = args.output or Path("runs") / datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     try:
@@ -168,6 +184,9 @@ def execute(args):
                 folder = output / f"model-{index:02d}"
                 folder.mkdir()
                 found = search(image, model, provider, config, folder)
+                found["released"] = (
+                    datetime.fromtimestamp(models[model]["created"], UTC).date().isoformat()
+                )
                 found["artifact_dir"] = f"model-{index:02d}"
                 result["models"].append(found)
                 write_report(image, result, output)

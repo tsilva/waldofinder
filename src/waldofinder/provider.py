@@ -5,6 +5,7 @@ import json
 import math
 import ssl
 import time
+from datetime import UTC, datetime
 from io import BytesIO
 
 import httpx
@@ -60,16 +61,30 @@ def parse_answer(content):
     return value
 
 
+def model_is_2026(model):
+    """Use OpenRouter's release timestamp; exclude unpinned routers and batch IDs."""
+    created = model.get("created")
+    name = model.get("id", "")
+    if type(created) is not int or not isinstance(name, str):
+        return False
+    try:
+        year = datetime.fromtimestamp(created, UTC).year
+    except (ValueError, OverflowError, OSError):
+        return False
+    return (
+        year == 2026
+        and not name.startswith(("~", "openrouter/"))
+        and ":batch" not in name
+        and "image" in model.get("architecture", {}).get("input_modalities", [])
+        and model.get("architecture", {}).get("output_modalities", []) == ["text"]
+    )
+
+
 def public_models():
     with httpx.Client(timeout=30, trust_env=False) as client:
         response = client.get("https://openrouter.ai/api/v1/models")
         response.raise_for_status()
-        return {
-            m["id"]: m
-            for m in response.json()["data"]
-            if "image" in m.get("architecture", {}).get("input_modalities", [])
-            and "text" in m.get("architecture", {}).get("output_modalities", [])
-        }
+        return {m["id"]: m for m in response.json()["data"] if model_is_2026(m)}
 
 
 class OpenRouter:
@@ -94,6 +109,8 @@ class OpenRouter:
         )
         self.max_tokens = args.max_tokens
         self.structured = args.structured
+        self.capabilities = getattr(args, "model_capabilities", {})
+        self.reasoning_effort = getattr(args, "reasoning_effort", "low")
 
     def close(self):
         self.client.close()
@@ -116,10 +133,19 @@ class OpenRouter:
                     ],
                 }
             ],
-            "temperature": 0,
             "max_tokens": self.max_tokens,
             "provider": {"allow_fallbacks": False, "require_parameters": True},
         }
+        supported = getattr(self, "capabilities", {}).get(model, {}).get("supported_parameters", [])
+        if "temperature" in supported:
+            body["temperature"] = 0
+        if "reasoning" in supported:
+            body["reasoning"] = {
+                "effort": getattr(self, "reasoning_effort", "low"),
+                "exclude": True,
+            }
+        elif "reasoning_effort" in supported:
+            body["reasoning_effort"] = getattr(self, "reasoning_effort", "low")
         if self.structured:
             body["response_format"] = {
                 "type": "json_schema",
@@ -159,6 +185,11 @@ class OpenRouter:
             **answer,
             "latency_seconds": round(time.monotonic() - start, 4),
             "usage": usage,
+            "request_settings": {
+                k: body[k]
+                for k in ("max_tokens", "temperature", "reasoning", "reasoning_effort")
+                if k in body
+            },
             "generation_id": generation_id,
             "returned_model": payload.get("model"),
             "provider": payload.get("provider"),

@@ -143,3 +143,34 @@ def test_infisical_only_named_secret_and_redacted_failure(monkeypatch):
         )
     assert "--expand=false" in seen and "--include-imports=false" in seen
     assert "--secret-overriding=false" in seen
+
+
+def test_reasoning_models_do_not_receive_unsupported_temperature():
+    def handler(request):
+        body = json.loads(request.content)
+        assert "temperature" not in body
+        assert body["reasoning"] == {"effort": "low", "exclude": True}
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-2026",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '{"decision":"absent","confidence":0.9,"reason":"no target"}'
+                        },
+                    }
+                ],
+            },
+        )
+
+    client = make_client(handler)
+    client.capabilities = {
+        "new/model": {"supported_parameters": ["reasoning", "structured_outputs"]}
+    }
+    try:
+        answer = client.classify("new/model", Image.new("RGB", (4, 4)))
+        assert answer["request_settings"]["reasoning"]["effort"] == "low"
+    finally:
+        client.close()
