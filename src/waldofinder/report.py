@@ -11,6 +11,9 @@ def write_report(image, result, output):
         annotated = image.copy()
         draw = ImageDraw.Draw(annotated)
         for item in model["observations"]:
+            localization = result.get("config", {}).get("strategy") == "bbox"
+            if localization and not item.get("bbox_pixels"):
+                continue
             color = (
                 "#e63a33"
                 if item["region"]["id"] in model["candidates"]
@@ -20,7 +23,7 @@ def write_report(image, result, output):
                 if item["decision"] != "absent"
                 else "#33a47a"
             )
-            x0, y0, x1, y1 = item["region"]["box"]
+            x0, y0, x1, y1 = item["bbox_pixels"] if localization else item["region"]["box"]
             draw.rectangle((x0, y0, x1 - 1, y1 - 1), outline=color, width=2)
             draw.text(
                 (x0 + 3, y0 + 3),

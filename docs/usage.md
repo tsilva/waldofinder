@@ -9,13 +9,14 @@ uv --config-file uv.toml run waldofinder serve --port auto
 ```
 
 Open the printed local URL. The dashboard uses your existing Infisical connection;
-credentials stay on the Python server. Every live call receives a separate Waldo
-appearance reference and the search crop, with explicit instructions for partial
-occlusion. Search crops explicitly request `original` image detail; the reference
-uses `auto`. It includes:
+credentials stay on the Python server. Every live call receives separate Waldo,
+Wenda and Odlaw examples followed by the search crop. Instructions exclude the two
+distractors while accounting for partial occlusion. Search crops request `original`
+image detail; the three references use `auto`. It includes:
 
 - A supplied beach scene or an uploaded PNG, JPEG or WebP (20 MB maximum).
-- Fixed grids or binary partitioning, overlap, depth, confidence and request caps.
+- Fixed grids, binary partitioning, or direct full-image bounding-box inference.
+  Grid/binary modes expose overlap, depth, confidence and request caps.
 - A 2026-only vision catalog. The default comparison is **Gemini 4 Argon** and
   **GPT-6.1 Sol**, with **Claude Sonnet 5.5** available as a third preset. The release
   year comes from OpenRouter metadata; floating routers, batch IDs and image
@@ -38,20 +39,113 @@ uses `auto`. It includes:
   of model predictions. **Mark Waldo** stores a reference pixel coordinate.
 - Saved run history and JSON export containing both predictions and human reviews.
   Reloading the page reconnects to an active run.
+- A post-run metrics panel comparing models against your saved crop labels,
+  including confusion counts, recall/sensitivity/TPR, specificity/TNR, precision,
+  accuracy and F1. Expand **Definitions & more metrics** for NPV, false positive
+  and negative rates, balanced accuracy, errors, abstentions and review gaps.
+
+### Post-benchmark metrics
+
+The panel appears automatically after a run finishes, including partial results
+for cancelled, failed or interrupted runs. Click a model name to review its
+crops. **Present** and **Absent** label whether Waldo is actually in that crop;
+they are not endorsements of the model's explanation. Scores update immediately,
+persist through the saved reviews, reload from history and appear in JSON exports.
+Clearing or changing a label recalculates scores. **Mark Waldo** alone supplies no
+crop labels, and a review is scoped to its model/region pair.
+
+The scoring unit is a completed crop decision, including BSP parent crops and
+overlapping crops. Predictions of Present/Absent are eligible only at or above
+the run's saved confidence threshold. Uncertain or lower-confidence answers
+abstain. Failed requests, abstentions, unreviewed crops and **Unsure** reviews do
+not enter the confusion matrix. The **Scored** denominator includes all completed
+calls, so coverage remains visible even when scores exclude failures or abstentions.
+These are metrics on the reviewed subset, not a complete-benchmark estimate.
+They measure crop presence, not exact localization, correct grounding of a
+description, independent samples, or scene-level search success.
+
+| Metric | Definition |
+| --- | --- |
+| Sensitivity = Recall = True positive rate (TPR) | TP / (TP + FN) |
+| Specificity = True negative rate (TNR) | TN / (TN + FP) |
+| Precision | TP / (TP + FP) |
+| Accuracy | (TP + TN) / (TP + FP + TN + FN) |
+| F1 | 2TP / (2TP + FP + FN) |
+| Negative predictive value (NPV) | TN / (TN + FN) |
+| False positive rate | FP / (FP + TN) |
+| False negative rate | FN / (FN + TP) |
+| Balanced accuracy | (Sensitivity + Specificity) / 2; both must be defined |
+
+A zero denominator is shown as **—** and exported as JSON `null`, not zero or
+100%. Until eligible crops have ground-truth labels, scores remain unavailable.
+Confidence is self-reported rather than calibrated.
+
+Direct bounding-box runs use the same rates for **full-image presence** (one
+decision per model). A positive presence label does not certify the proposed
+coordinates. Box correctness is inspected separately against the image and any
+marked reference point; containment of that point alone is not IoU or identity proof.
+
+`GET /api/runs/RUN_ID` and the JSON export include a derived `metrics` object
+with `version`, `unit`, `ground_truth`, `threshold` and per-model `counts`, `rates`
+and `coverage`. Rates are fractions in `[0, 1]` or `null`; the UI shows percentages.
+The review POST response retains its existing review fields and adds `metrics`.
+Completion/review SSE events include updated metrics. These values are computed
+from saved predictions and independent `review.json` labels; the original
+prediction report is not rewritten when a reviewer changes their mind.
 
 **Stop** prevents new calls and lets calls already in flight finish. Results
 and events are saved under `runs/web-*/`; human labels and the target marker are in
 `review.json`. Refreshing the page resumes the current run. A server restart marks
 unfinished sessions interrupted and preserves completed observations. The server
 binds to `127.0.0.1`, validates request origin and requires a per-session token for
-writes. It is a local tool, with no hosted authentication or remote access.
+writes. This describes the local `serve` command. The Vercel adapter below uses a
+separate request lifecycle and browser-local history.
 
 For another image, pass `--image /path/to/scene.png`. The `serve` command accepts
 the same Infisical binding options as `run`, plus `--runs-dir` for a different local
 experiment folder. `--reference /path/to/waldo.png` selects the appearance exemplar
-(default `data/waldo-reference.jpg`); its preview and the full prompt are available
+(default `data/waldo-reference.jpg`). `--wenda-reference` and `--odlaw-reference`
+select the distractor files (defaults `data/wenda-reference.png` and
+`data/odlaw-reference.png`); their previews and the full prompt are available
 under **Reference & prompt for new searches** in configuration. The UI uses bundled HTML, CSS and JavaScript with no npm build
 or external frontend dependencies.
+
+## Hosted Vercel app
+
+The hosted app keeps the same grid, BSP and direct-box engine and prompts.
+`api/index.py` exposes `HostedHandler`: a search runs inside one active streaming
+POST request, not a detached serverless task. A cancellation timer stops new work
+after 180 seconds; in-flight calls finish within their 90-second per-call timeout.
+The Function has a 300-second duration limit. Disconnecting cancels scheduling
+when the server detects it; already-sent requests may still be billed. There are
+no automatic inference retries. A lost connection or page reload preserves received
+observations as an interrupted run and never silently starts a replacement.
+
+The browser saves source bytes, exact transmitted crop bytes, predictions,
+configuration and manual reviews in IndexedDB. History and JSON export read that
+browser's data. Storage is not shared across visitors, browsers or devices; clearing
+site data deletes it. Export before clearing data. Review metrics use the same
+Python calculator as local runs. A browser storage failure is shown explicitly.
+
+Hosted uploads accept PNG/JPEG/WebP up to 3 MB and 40 megapixels. The encoded JSON
+request is capped at 4.2 MB to fit the platform request limit. The source is not
+automatically recompressed or resized. Limits are 32 requests/model, 8,192 tokens
+and 90 seconds/call. These are request limits, not a dollar budget. Public visitors
+use the production key; control the total budget on that key in OpenRouter.
+
+Build assets are fetched from hash-pinned sources in `scripts/build_hosted.py`.
+The original beach JPEG is byte-identical to the source-resolution experiment.
+Wenda/Odlaw are rendered from the same pinned publisher PDF using PyMuPDF, so
+rendered reference bytes differ from the local Poppler condition. Every run saves
+actual reference hashes; do not present this as the old byte-identical benchmark.
+Artwork stays out of Git. Run `uv --config-file uv.toml run python scripts/build_hosted.py`
+to prepare assets, then `uv --config-file uv.toml run python scripts/serve_hosted.py
+--port auto --fixture` for an explicit synthetic, zero-inference UI check.
+
+Production access uses an environment-injected `OPENROUTER_API_KEY`; there is no
+fallback to a developer's Agent Vault or another project's key. The key is delivered
+from an isolated Infisical Production vault by the ordered GitHub Actions workflow.
+See [production delivery](production-delivery.md) for pinned identities and setup.
 
 ## Quick start
 
@@ -63,6 +157,10 @@ uv --config-file uv.toml sync --locked
 # Download the publisher's standalone character illustration for local testing.
 curl --fail --location https://waldo.candlewick.com/images/waldo-wave.jpg \
   --output data/waldo-reference.jpg
+# Requires Poppler's pdftoppm. Extract publisher PDF pages 3 (Wenda) and 5 (Odlaw).
+curl --fail --location https://waldo.candlewick.com/pdf/WaldoCharacterSheets20.pdf \
+  --output /tmp/WaldoCharacterSheets20.pdf
+uv --config-file uv.toml run python -m experiments.extract_distractors /tmp/WaldoCharacterSheets20.pdf
 uv --config-file uv.toml run waldofinder models
 # Put your own test image at data/beach.png, or pass another local image path.
 uv --config-file uv.toml run waldofinder preview data/beach.png --tiles 9 --output runs/preview
@@ -125,28 +223,76 @@ unpadded region. Adjacent positive crops may describe the same character.
 Uncertain and low-confidence decisions continue through binary search; they do
 not count as detections. This score is not a calibrated probability.
 
+### Direct bounding box
+
+Select **Configure → Mode → Direct bounding box**, or use `--strategy bbox`.
+Each selected model receives the complete scene once; requests share the normal
+concurrency limit. Grid size, overlap and binary refinement settings do not split
+the image in this mode. The same Waldo/Wenda/Odlaw references, occlusion guidance,
+`original` search detail and reasoning controls apply.
+
+The versioned localization prompt asks the model to locate Waldo without a hint
+and return `decision`, `confidence`, `reason` and `bbox`. For a present answer,
+`bbox` is `[x_min, y_min, x_max, y_max]` in a normalized **0–1000** space, x left to
+right and y top to bottom, relative only to the search image. Absent and uncertain
+answers must use `bbox: null`. The prompt excludes printed portraits and reference
+panels. It asks for a tight box around the visible character, including partial
+occlusion, rather than an imagined hidden body.
+
+Malformed, non-finite, inverted or out-of-range boxes are errors; they are not
+silently clamped or counted as negatives. Valid bounds are converted to original
+image pixels, rounding the left/top down and right/bottom up. Observations preserve
+both normalized `bbox` and half-open `bbox_pixels` alongside usage and generation ID.
+
+The image displays distinct box colours for each model, with matching clickable
+status badges. Low-confidence present boxes are dashed proposals and do not count
+as confident candidates. Absent/uncertain replies draw no box. Crop review displays
+the exact full-image input and the predicted box; a human marker reports whether
+the marked point lies inside or outside the returned box. The scene remains fitted
+to the viewport. History, replay, annotations and JSON exports preserve the mode
+and coordinates.
+
+Full images use **JPEG quality 90, 4:4:4 chroma, without resizing**, to reduce upload
+size relative to PNG. This adds lossy compression, so it is a separate input
+condition from the grid/binary PNG default. The exact sent JPEG is saved as
+`model-XX/crops/root.jpg`; its SHA-256 and encoding settings are recorded in
+`request_settings`. Large uploads can still fail through a credential proxy.
+
+```sh
+uv --config-file uv.toml run waldofinder run data/beach-high-resolution.jpg \
+  --strategy bbox --model google/gemini-4-argon --model openai/gpt-6.1-sol \
+  --reasoning-effort high --max-tokens 8192 --structured --output runs/direct-box-new
+```
+
+This command makes paid calls. Use `preview IMAGE --strategy bbox --output NEW_DIR`
+for a single full-image input preview without inference.
+
 ## Prompt and visual reference
 
-Each request contains the same text instruction, a labeled **REFERENCE** image,
-then a labeled **SEARCH CROP** image. Only the search crop counts as evidence of
-presence. The reference is a separate full-figure illustration, never a target
-crop extracted from the test scene. The prompt explains that Waldo is often
-partially occluded or cut off at the crop edge, and does not require his whole
-body or every identifying feature to be visible together. Stripes alone are
-insufficient; weak or ambiguous evidence should produce `uncertain`.
+Each request contains the text instruction, a labeled Waldo **REFERENCE**, separate
+**DISTRACTOR REFERENCE** images for Wenda and Odlaw, then the **SEARCH CROP**.
+Only the crop counts as detection evidence. These are independent publisher
+illustrations, never examples extracted from the scene under test.
 
-The reference is required for live inference. Both `run` and `serve` accept
-`--reference PATH`; offline `preview` does not need it. The default local image
-comes from [Candlewick's Waldo site](https://waldo.candlewick.com/). Artwork stays
-ignored by Git. Supply your own appropriate reference when cloning the repo.
-The server normalizes it to RGB PNG once and copies the exact exemplar into each
-run as `reference.png`. Results and session exports record the prompt version,
-full prompt, reference dimensions, source hash and normalized PNG hash. Each
-observation records its reference hash and prompt version. Historical runs and
-replays retain their original provenance rather than adopting the current prompt.
+Prompt `waldo-distractor-occlusion-v3` explicitly excludes Wenda and Odlaw. Wenda
+shares the red-and-white shirt, hat and glasses; visible long hair, skirt or striped
+tights help distinguish her. Odlaw has yellow-and-black stripes, dark glasses and
+a moustache. The prompt permits partial occlusion and crop-edge truncation,
+forbids inventing hidden features, and requests `uncertain` when identity cannot
+be resolved. Carrying gear alone is not a reason to exclude Waldo.
+
+All three references are required for live inference. `run` and `serve` accept
+`--reference PATH`, `--wenda-reference PATH` and `--odlaw-reference PATH`;
+offline `preview` needs none. See the quick start for publisher downloads and
+local extraction. Artwork remains ignored by Git and is not redistributed.
+References are normalized to RGB PNG and copied into each run as `reference.png`,
+`wenda-reference.png` and `odlaw-reference.png`. Results and session exports save
+the prompt, version, dimensions, source and normalized hashes. Observations save
+the hashes of all three inputs. Replays preserve original prompts and references;
+old runs do not silently acquire the new examples.
 
 New live searches in both the app and CLI use OpenRouter's `original` detail for
-the search image and `auto` for the reference. Exact image detail is
+the search image and `auto` for each reference. Exact image detail is
 provider-dependent; saved run metadata and each observation's `request_settings`
 record the requested levels. History and crop review display the search detail;
 older runs without this metadata retain their implicit `auto` label. Replays
@@ -198,7 +344,7 @@ runs/grid/
   summary.csv               # per-model time, calls, errors, tokens and cost
   model-00/
     annotated.png           # region outlines and labels for review
-    crops/                  # exact PNG inputs sent to the model
+    crops/                  # exact inputs: PNG, or root.jpg for direct boxes
 ```
 
 Annotations use red for terminal candidates, amber for other present/uncertain
@@ -299,3 +445,89 @@ runtime copies aligned with the matching exports in `image-assets/web-seo/` when
 refreshing the branding. The runtime web manifest also sets `start_url` and
 `scope` to `/`. Social metadata references the local image route; the dashboard
 remains a loopback-only app rather than a publicly hosted social-preview page.
+
+## Named distractor experiment
+
+The [three-model distractor report](../reports/2026-10-21-distractor-references.md)
+compares five repeats of the same positive and two negative crops, before and
+after adding Wenda/Odlaw examples and explicit exclusion instructions. Local
+artifacts are under `runs/distractor-references-2026-10-21/` (ignored by Git).
+Prepare or inspect without paid calls:
+
+```bash
+uv --config-file uv.toml run python -m experiments.distractor_references \
+  --output runs/distractor-references-2026-10-21
+```
+
+`--live` enables paid calls; `--probe` runs only positive replicate 1 per model.
+Completed attempts, including failures, are never automatically retried. Existing
+saved baseline folders are required and hash-checked. The saved prompt/schema,
+Waldo example, crops and distractor bytes are checked before resuming. The older
+image-detail prompt is frozen separately so historical baselines remain intact.
+
+## Native OpenAI controls
+
+The [direct-Sol and Image 2.5 report](../reports/2026-10-21-native-openai-controls.md)
+compares native OpenAI calls with the saved OpenRouter condition. Sol keeps the
+same Chat Completions inputs/settings to isolate routing. Sunburst edits each
+crop to circle Waldo, with independent visual review for invented or altered
+characters. Both use the same three appearance examples and exact crop files.
+
+```bash
+uv --config-file uv.toml run python -m experiments.openai_controls \
+  --output runs/native-openai-controls-2026-10-21
+```
+
+Preparation/summarization is offline. `--live` enables paid calls and reads a
+short-lived OpenAI key through a hidden terminal prompt; it does not save the key
+or change the app's Infisical/OpenRouter authentication. Five repetitions per crop,
+two arms, no automatic retries, 30 calls maximum per fresh experiment. Native
+usage-based dollar estimates are distinguished from OpenRouter-reported cost.
+`experiments.review_openai_controls FOLDER` proposes circle bounds and builds a
+side-by-side input/output viewer. Proposals require visual review: a generated
+Waldo in the wrong place is not evidence of a source-image detection.
+
+## BSP across additional scenes
+
+The [19-scene report](../reports/2026-10-21-gemini-bsp-scenes.md) records seven
+visually confirmed finds, six model misses and six inconclusive target paths.
+
+`experiments.bsp_scenes` runs the production binary-search engine on the frozen
+19-scene collection described in [data provenance](../data/README.md). It uses
+Gemini 4 Argon, `original` image detail, high reasoning, three appearance examples,
+8% crop overlap, depth 4, and a 32-region cap per scene. A common prompt excludes
+printed character examples from all scenes; target coordinates are never supplied.
+
+```bash
+uv --config-file uv.toml run python -m experiments.bsp_scenes \
+  --output runs/gemini-bsp-scenes-new
+```
+
+Add `--live` for paid calls through the existing Infisical proxy. The first pending
+scene runs before releasing the rest; if all its calls fail, submissions stop.
+Up to eight scenes and 32 inference calls can overlap. A separate 5.8 MB budget
+limits concurrent request bodies until response headers arrive, protecting the
+proxy's 60-second upload deadline on slow connections.
+
+The transport encodes search crops as JPEG quality 90, with 4:4:4 chroma and **no
+resizing**. This adds lossy compression, so results are a separate condition from
+earlier PNG experiments. Appearance-reference PNGs remain unchanged. Exact sent
+JPEGs are saved by SHA-256 under `transport-inputs/`; each successful observation
+records its transmitted crop, encoding, dimensions, wire size and upload queue
+time. Timing includes encoding, upload, queueing and inference under shared load.
+There are no automatic retries. Completed attempts are preserved on resume;
+interrupted scene folders require review rather than silent resubmission.
+
+`comparison.json` separates searches with transport errors from error-free
+searches. Reported costs omit unreported charges and are marked incomplete when
+usage is missing. Candidate containment of the target point is only coarse region
+coverage: the model's explanation still needs visual verification against the
+character, and one attempt per scene does not establish repeatability.
+
+`python -m experiments.review_bsp_scenes OUTPUT` builds `review.html` from saved
+results, with frozen ground-truth markers, candidate boxes and original target
+context. Assistant visual judgments are saved separately in `visual-review.json`;
+the 19-scene run's `evaluated-results.json` contains the checked final outcomes.
+The source manifest is snapshotted so later catalog-label corrections do not
+erase acquisition provenance. The department-store and musketeer scenes had
+incorrect initial descriptive labels; image bytes and target coordinates did not change.

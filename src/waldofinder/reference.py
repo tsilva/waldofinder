@@ -59,3 +59,63 @@ def load_reference(path):
         raise ValueError(
             "Choose a valid Waldo reference image with --reference (up to 10 MB / 4 megapixels)."
         ) from None
+
+
+DISTRACTOR_SOURCE = "https://waldo.candlewick.com/pdf/WaldoCharacterSheets20.pdf"
+DISTRACTOR_HASHES = {
+    "wenda": "bb8b3a65870b72677d9da9f20925654b318e044749634d28803519373624d1d7",
+    "odlaw": "5ba45b067d60bb1efbf7acb31ab3b3344294fdf66fbcb68ae65efd2a8ab52ea9",
+}
+DISTRACTOR_LABELS = {
+    "wenda": "DISTRACTOR REFERENCE — Wenda, NOT Waldo. Appearance example only; never count this image.",
+    "odlaw": "DISTRACTOR REFERENCE — Odlaw, NOT Waldo. Appearance example only; never count this image.",
+}
+
+
+def load_distractors(args):
+    paths = getattr(args, "distractor_references", None)
+    if paths is None:
+        paths = {
+            name: getattr(args, f"{name}_reference", Path(f"data/{name}-reference.png"))
+            for name in DISTRACTOR_LABELS
+        }
+    if set(paths) not in (set(), set(DISTRACTOR_LABELS)):
+        raise ValueError("Provide both Wenda and Odlaw references.")
+    result = {}
+    for name, path in paths.items():
+        try:
+            result[name] = load_reference(path)
+        except ValueError:
+            raise ValueError(
+                f"Choose a valid {name.title()} reference with --{name}-reference (up to 10 MB / 4 megapixels)."
+            ) from None
+    return result
+
+
+def distractor_manifest(references):
+    return {
+        name: reference.manifest
+        | {
+            "file": f"{name}-reference.png",
+            "source_url": DISTRACTOR_SOURCE
+            if reference.source_sha256 == DISTRACTOR_HASHES[name]
+            else None,
+            "source_page": {"wenda": 3, "odlaw": 5}[name]
+            if reference.source_sha256 == DISTRACTOR_HASHES[name]
+            else None,
+            "label": DISTRACTOR_LABELS[name],
+        }
+        for name, reference in references.items()
+    }
+
+
+def distractor_content(references):
+    content = []
+    for name, reference in references.items():
+        content.extend(
+            [
+                {"type": "text", "text": DISTRACTOR_LABELS[name]},
+                {"type": "image_url", "image_url": {"url": reference.data_url, "detail": "auto"}},
+            ]
+        )
+    return content

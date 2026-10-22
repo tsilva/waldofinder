@@ -10,6 +10,9 @@ from PIL import Image
 
 from waldofinder.credentials import CredentialError, agent_vault, infisical_key
 from waldofinder.provider import (
+    LOCALIZATION_PROMPT,
+    LOCALIZATION_SCHEMA,
+    LOCALIZATION_VERSION,
     PROMPT_VERSION,
     REFERENCE_LABEL,
     SEARCH_LABEL,
@@ -18,6 +21,128 @@ from waldofinder.provider import (
     parse_answer,
 )
 from waldofinder.reference import VisualReference, load_reference
+
+
+@pytest.mark.parametrize(
+    "box",
+    [
+        None,
+        [],
+        [1, 2, 3],
+        [1, 2, 3, 4, 5],
+        [-1, 0, 10, 10],
+        [0, 0, 1001, 10],
+        [20, 0, 10, 10],
+        [0, 10, 10, 10],
+        [True, 0, 10, 10],
+        [0, 0, float("nan"), 10],
+    ],
+)
+def test_invalid_localization_boxes_are_rejected(box):
+    with pytest.raises(ValueError):
+        parse_answer(
+            json.dumps(dict(decision="present", confidence=0.95, reason="test", bbox=box)),
+            localization=True,
+        )
+
+
+def test_absent_and_uncertain_cannot_return_speculative_boxes():
+    for decision in ["absent", "uncertain"]:
+        answer = dict(decision=decision, confidence=0.9, reason="No reliable target", bbox=None)
+        assert parse_answer(json.dumps(answer), localization=True) == answer
+        answer["bbox"] = [100, 100, 200, 200]
+        with pytest.raises(ValueError):
+            parse_answer(json.dumps(answer), localization=True)
+
+
+@pytest.mark.parametrize("structured", [True, False])
+def test_full_image_localization_payload_preserves_dimensions_and_validates_box(structured):
+    captured = {}
+
+    def handler(request):
+        body = json.loads(request.content)
+        captured.update(body)
+        content = body["messages"][0]["content"]
+        assert content[0]["text"] == LOCALIZATION_PROMPT
+        image = content[-1]["image_url"]
+        assert image["detail"] == "original" and image["url"].startswith("data:image/jpeg;base64,")
+        raw = base64.b64decode(image["url"].split(",")[1])
+        assert Image.open(BytesIO(raw)).size == (101, 67)
+        captured["sent_sha"] = hashlib.sha256(raw).hexdigest()
+        if structured:
+            assert body["response_format"]["json_schema"]["schema"] == LOCALIZATION_SCHEMA
+        else:
+            assert "response_format" not in body
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-box",
+                "model": "test",
+                "usage": {"cost": 0.02},
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                dict(
+                                    decision="present",
+                                    confidence=0.95,
+                                    reason="Visible hat and glasses",
+                                    bbox=[100, 200, 300, 400],
+                                )
+                            )
+                        },
+                    }
+                ],
+            },
+        )
+
+    client = make_client(handler, structured=structured)
+    client.localization = True
+    try:
+        answer = client.classify("test", Image.new("RGB", (101, 67)))
+        assert answer["bbox"] == [100, 200, 300, 400]
+        assert answer["request_settings"]["prompt_version"] == LOCALIZATION_VERSION
+        assert answer["request_settings"]["search_image_sha256"] == captured["sent_sha"]
+        assert answer["request_settings"]["bbox_format"] == "xyxy_normalized_0_1000"
+    finally:
+        client.close()
+
+
+def test_invalid_localization_response_retains_generation_and_cost():
+    client = make_client(
+        lambda _: httpx.Response(
+            200,
+            json={
+                "id": "gen-invalid-box",
+                "usage": {"cost": 0.03},
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                dict(
+                                    decision="present",
+                                    confidence=0.99,
+                                    reason="invalid",
+                                    bbox=[0, 0, 2000, 100],
+                                )
+                            )
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    client.localization = True
+    try:
+        with pytest.raises(ProviderError) as caught:
+            client.classify("test", Image.new("RGB", (10, 20)))
+        assert (
+            caught.value.generation_id == "gen-invalid-box" and caught.value.usage["cost"] == 0.03
+        )
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize(
@@ -56,6 +181,7 @@ def make_client(handler, structured=True):
     raw = stream.getvalue()
     provider.reference = VisualReference(raw, hashlib.sha256(raw).hexdigest(), 2, 3)
     provider.reference_data_url = provider.reference.data_url
+    provider.distractors = {"wenda": provider.reference, "odlaw": provider.reference}
     return provider
 
 
@@ -67,19 +193,23 @@ def test_openrouter_image_payload_and_schema():
         assert body["model"] == "test"
         content = body["messages"][0]["content"]
         assert content[1]["text"] == REFERENCE_LABEL
-        assert content[3]["text"] == SEARCH_LABEL
+        assert content[7]["text"] == SEARCH_LABEL
+        assert "Wenda, NOT Waldo" in content[3]["text"]
+        assert "Odlaw, NOT Waldo" in content[5]["text"]
         images = [row for row in content if row["type"] == "image_url"]
-        assert len(images) == 2
+        assert len(images) == 4
         assert images[0]["image_url"]["detail"] == "auto"
-        assert images[1]["image_url"]["detail"] == "original"
+        assert all(row["image_url"]["detail"] == "auto" for row in images[:3])
+        assert images[3]["image_url"]["detail"] == "original"
         reference, crop = [
             Image.open(BytesIO(base64.b64decode(row["image_url"]["url"].split(",")[1])))
-            for row in images
+            for row in (images[0], images[-1])
         ]
         assert reference.size == (2, 3) and reference.getpixel((0, 0)) == (0, 128, 0)
         assert crop.size == (4, 4) and crop.getpixel((0, 0)) == (0, 0, 0)
         assert "partially occluded" in content[0]["text"]
-        assert "Never count the character in the REFERENCE" in content[0]["text"]
+        assert "Never count any character in any REFERENCE" in content[0]["text"]
+        assert "If occlusion makes Waldo and Wenda indistinguishable" in content[0]["text"]
         assert body["response_format"]["json_schema"]["strict"] is True
         return httpx.Response(
             200,
@@ -106,6 +236,9 @@ def test_openrouter_image_payload_and_schema():
         assert answer["request_settings"]["prompt_version"] == PROMPT_VERSION
         assert answer["request_settings"]["reference_sha256"] == client.reference.sha256
         assert answer["request_settings"]["image_detail"] == "original"
+        assert answer["request_settings"]["distractor_sha256"] == {
+            name: ref.sha256 for name, ref in client.distractors.items()
+        }
         assert answer["request_settings"]["reference_detail"] == "auto"
     finally:
         client.close()
@@ -285,5 +418,34 @@ def test_unsupported_effort_is_not_silently_ignored():
         with pytest.raises(ProviderError, match="does not support"):
             client.classify("test", Image.new("RGB", (4, 4)))
         assert not calls
+    finally:
+        client.close()
+
+
+def test_internal_experiment_prompt_override_is_sent_and_recorded():
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["messages"][0]["content"][0]["text"] == "Frozen scene-only experiment prompt"
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-custom-prompt",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '{"decision":"absent","confidence":0.9,"reason":"No target in scene"}'
+                        },
+                    }
+                ],
+            },
+        )
+
+    client = make_client(handler)
+    client.prompt = "Frozen scene-only experiment prompt"
+    client.prompt_version = "test-scene-version"
+    try:
+        result = client.classify("test", Image.new("RGB", (4, 4)))
+        assert result["request_settings"]["prompt_version"] == "test-scene-version"
     finally:
         client.close()

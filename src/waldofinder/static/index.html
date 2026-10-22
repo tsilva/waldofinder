@@ -41,6 +41,12 @@
     <div id="message" role="status" hidden></div>
     <div id="mark-hint" hidden>Click Waldo’s location · Escape to cancel</div>
   </main>
+  <section id="benchmark-metrics" class="benchmark-metrics" aria-labelledby="metrics-title" hidden>
+    <div class="metrics-heading"><h2 id="metrics-title">Benchmark metrics</h2><span id="metrics-coverage" class="subtle"></span></div>
+    <div class="metrics-table-wrap"><table class="metrics-table"><caption class="sr-only">Per-model metrics for reviewed presence decisions</caption><thead><tr><th scope="col">Model</th><th scope="col" title="True positives / False positives / True negatives / False negatives">TP / FP / TN / FN</th><th scope="col" title="Sensitivity = Recall = True positive rate: TP / (TP + FN)">Recall <small>Sensitivity · TPR</small></th><th scope="col" title="Specificity = True negative rate: TN / (TN + FP)">Specificity <small>TNR</small></th><th scope="col" title="TP / (TP + FP)">Precision</th><th scope="col" title="(TP + TN) / (TP + FP + TN + FN)">Accuracy</th><th scope="col" title="2TP / (2TP + FP + FN)">F1</th><th scope="col" title="Scored decisions / completed calls, including errors and abstentions">Scored</th></tr></thead><tbody id="metrics-rows"></tbody></table></div>
+    <p id="metrics-note" class="subtle"></p>
+    <details id="metrics-details"><summary>Definitions &amp; more metrics</summary><div class="metrics-table-wrap"><table class="metrics-table"><caption class="sr-only">Additional per-model classification metrics and excluded decisions</caption><thead><tr><th scope="col">Model</th><th scope="col" title="TN / (TN + FN)">NPV</th><th scope="col" title="FP / (FP + TN)">False positive rate</th><th scope="col" title="FN / (FN + TP)">False negative rate</th><th scope="col" title="(Sensitivity + Specificity) / 2; requires both classes">Balanced accuracy</th><th scope="col">Errors</th><th scope="col">Abstentions</th><th scope="col">Unreviewed</th><th scope="col">Unsure reviews</th></tr></thead><tbody id="metrics-more-rows"></tbody></table></div><p class="subtle">Ground truth is your Present/Absent review of the input image, saved per model and region. The location marker alone does not label presence. Present/Absent predictions below the run’s confidence threshold and uncertain answers abstain. Errors, abstentions and missing/unsure reviews are excluded from rates. A dash means no eligible denominator. These measure presence in each input: a crop for grid/BSP or the full image for direct bounding boxes. BSP parent and overlapping crops count separately. They do not measure exact localization, verified identity or scene-level search success.</p><dl class="metric-definitions"><dt>Sensitivity = Recall = TPR</dt><dd>TP / (TP + FN)</dd><dt>Specificity = TNR</dt><dd>TN / (TN + FP)</dd><dt>Precision</dt><dd>TP / (TP + FP)</dd><dt>Accuracy</dt><dd>(TP + TN) / scored decisions</dd><dt>F1</dt><dd>2TP / (2TP + FP + FN)</dd><dt>Negative predictive value (NPV)</dt><dd>TN / (TN + FN)</dd></dl></details>
+  </section>
   <footer class="statusbar">
     <div class="status-line" aria-live="polite"><span id="run-status">Ready</span><span id="stats"></span></div>
     <button id="mark-target" aria-label="Mark Waldo on image" title="Place a human reference marker" disabled><span data-icon="pin"></span><span class="button-label">Mark Waldo</span></button>
@@ -50,15 +56,16 @@
     <div class="dialog-heading"><h2 id="config-title">Search configuration</h2><button data-close="config-dialog" aria-label="Close configuration"><span data-icon="x"></span></button></div>
     <form id="config-form">
       <fieldset id="config-fields">
-        <label>Strategy<select id="strategy"><option value="grid">Fixed grid</option><option value="binary">Binary partition</option></select></label>
+        <label>Mode<select id="strategy"><option value="grid">Fixed grid</option><option value="binary">Binary partition</option><option value="bbox">Direct bounding box</option></select></label>
+        <p id="bbox-options" class="subtle" hidden>Each model receives the full image once and returns Waldo’s box, or no box if absent/uncertain.</p>
         <div id="grid-options"><label>Regions<input id="tiles" type="number" value="9" min="1" max="256"></label></div>
         <div id="binary-options" hidden><div class="paired"><label>Maximum depth<input id="max-depth" type="number" min="1" max="10" value="4"></label><label>Minimum size (px)<input id="min-size" type="number" min="1" max="4096" value="64"></label></div><label class="check"><input id="explore-negatives" type="checkbox">Explore negative branches</label><label class="check"><input id="all-candidates" type="checkbox">Continue after first candidate</label></div>
         <div class="field-heading">Models <span class="subtle">2026 releases only</span></div>
         <div id="model-options"></div>
         <details><summary>Add model</summary><div class="add-model"><input id="custom-model" list="model-catalog" placeholder="provider/model-id" aria-label="Additional model ID"><button id="add-model" type="button">Add</button></div><datalist id="model-catalog"></datalist></details>
         <div class="catalog-line"><small id="catalog-status">Loading catalog…</small><button id="refresh-models" type="button" aria-label="Refresh model catalog"><span data-icon="refresh"></span></button></div>
-        <details id="reference-details"><summary>Reference &amp; prompt for new searches</summary><img id="reference-image" alt="Waldo appearance reference" hidden><p class="subtle">Each call receives this reference followed by the search crop. Search detail: original. Reference detail: auto. Only the search crop counts as a detection.</p><pre id="prompt-preview"></pre></details>
-        <div class="paired"><label>Parallel calls (total)<input id="concurrency" type="number" min="1" max="64" value="32"></label><label>Call cap / model<input id="max-requests" type="number" min="1" max="256" value="32"></label></div>
+        <details id="reference-details"><summary>Reference &amp; prompt for new searches</summary><img id="reference-image" alt="Waldo appearance reference" hidden><span id="distractor-images"></span><p id="reference-mode-note" class="subtle">Each call receives Waldo, Wenda and Odlaw references followed by the search crop. Wenda and Odlaw are excluded. Search detail: original. Reference detail: auto. Only the search crop counts as a detection.</p><pre id="prompt-preview"></pre></details>
+        <div class="paired" id="request-limit-pair"><label>Parallel calls (total)<input id="concurrency" type="number" min="1" max="64" value="32"></label><label id="request-cap-field">Call cap / model<input id="max-requests" type="number" min="1" max="256" value="32"></label></div>
         <details id="advanced-settings"><summary>More settings</summary><label>Reasoning effort<select id="reasoning-effort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><div class="paired"><label>Overlap (%)<input id="overlap" type="number" min="0" max="50" value="8"></label><label>Confidence threshold<input id="threshold" type="number" min="0" max="1" step="0.05" value="0.7"></label><label>Response token cap<input id="max-tokens" title="Includes reasoning and the final answer" type="number" min="64" max="32768" step="64" value="2048"></label><label>Request timeout (s)<input id="timeout" type="number" min="1" max="180" value="90"></label></div><label class="check"><input id="structured" type="checkbox" checked>Require structured JSON</label></details>
       </fieldset>
       <p id="estimate" class="subtle"></p><p id="config-error" role="alert" hidden></p>
@@ -68,10 +75,10 @@
   <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title">
     <div class="dialog-heading"><h2 id="review-title">Review region</h2><button data-close="review-dialog" aria-label="Close review"><span data-icon="x"></span></button></div>
     <div class="review-selectors"><label>Model<select id="review-model"></select></label><label>Region<select id="review-region"></select></label></div>
-    <div class="crop-frame"><img id="crop-image" alt="Exact crop sent to the model"></div>
+    <div class="crop-frame"><div class="crop-preview"><img id="crop-image" alt="Exact crop sent to the model"><svg id="crop-box-overlay" aria-label="Model predicted bounding box" role="img" hidden></svg></div></div>
     <div class="decision-line"><strong id="crop-decision"></strong><span id="crop-meta" class="subtle"></span></div>
     <p id="crop-reason"></p>
-    <p class="subtle">Your review</p>
+    <p class="subtle">Ground truth for this crop</p>
     <div class="review-buttons"><button data-verdict="present">Present</button><button data-verdict="absent">Absent</button><button data-verdict="unsure">Unsure</button><button id="clear-label" hidden>Clear</button></div>
     <p id="review-feedback" class="subtle" aria-live="polite"></p>
   </dialog>

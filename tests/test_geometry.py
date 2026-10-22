@@ -1,6 +1,6 @@
 import pytest
 
-from waldofinder.geometry import Region, grid
+from waldofinder.geometry import Region, bbox_to_pixels, grid
 
 
 @pytest.mark.parametrize("size", [(11, 7), (1, 17), (17, 1), (3, 2)])
@@ -45,3 +45,9 @@ def test_square_tile_counts_default_to_regular_square_grids():
         regions = grid((1080, 675), n)
         assert len({r.box[1] for r in regions}) == side
         assert len({r.box[0] for r in regions}) == side
+
+
+def test_normalized_xyxy_boxes_use_correct_axes_on_nonsquare_images():
+    assert bbox_to_pixels([100, 200, 300, 400], (101, 67)) == [10, 13, 31, 27]
+    assert bbox_to_pixels([0, 0, 1000, 1000], (101, 67)) == [0, 0, 101, 67]
+    assert bbox_to_pixels([0.01, 0.01, 0.02, 0.02], (101, 67)) == [0, 0, 1, 1]

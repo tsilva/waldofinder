@@ -1,9 +1,68 @@
+import threading
+
 import pytest
 from PIL import Image
 
 from waldofinder.provider import ProviderError
 from waldofinder.report import write_report
 from waldofinder.search import search, search_models
+
+
+def test_direct_boxes_query_full_image_once_per_model_in_parallel(tmp_path):
+    barrier = threading.Barrier(2)
+
+    class Localizer(Fake):
+        def classify(self, model, image):
+            assert image.size == (320, 180)
+            barrier.wait(timeout=3)
+            return super().classify(model, image) | {"bbox": [100, 200, 300, 400]}
+
+    config = CONFIG | {"strategy": "bbox", "tiles": 256, "max_requests": 1}
+    rows = search_models(Image.new("RGB", (320, 180)), ["a", "b"], Localizer(), config, tmp_path)
+    assert [r["requests"] for r in rows] == [1, 1]
+    for index, row in enumerate(rows):
+        assert row["candidates"] == ["root"]
+        observation = row["observations"][0]
+        assert observation["crop_box"] == (0, 0, 320, 180)
+        assert observation["bbox_pixels"] == [32, 36, 96, 72]
+        assert Image.open(tmp_path / f"model-{index:02d}" / observation["crop"]).size == (320, 180)
+    write_report(
+        Image.new("RGB", (320, 180), "white"), {"config": config, "models": rows}, tmp_path
+    )
+    annotated = Image.open(tmp_path / "model-00/annotated.png")
+    assert annotated.getpixel((32, 36)) != (255, 255, 255)
+    assert annotated.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_direct_box_failures_are_errors_not_silently_clamped_locations(tmp_path):
+    class InvalidLocalizer(Fake):
+        def classify(self, model, image):
+            return super().classify(model, image) | {"bbox": [0, 0, 1500, 1000]}
+
+    row = search(
+        Image.new("RGB", (80, 60)),
+        "test",
+        InvalidLocalizer(),
+        CONFIG | {"strategy": "bbox"},
+        tmp_path,
+    )
+    assert row["requests"] == row["errors"] == 1 and not row["candidates"]
+    assert row["observations"][0]["usage"]["cost"] == 0.001
+
+
+def test_direct_absence_does_not_invent_or_draw_a_box(tmp_path):
+    class AbsentLocalizer(Fake):
+        def classify(self, model, image):
+            return super().classify(model, image) | {"bbox": None}
+
+    image = Image.new("RGB", (80, 60), "white")
+    config = CONFIG | {"strategy": "bbox"}
+    row = search(image, "test", AbsentLocalizer("absent"), config, tmp_path / "model-00")
+    assert row["requests"] == 1 and row["errors"] == 0 and not row["candidates"]
+    assert row["observations"][0]["bbox_pixels"] is None
+    write_report(image, {"config": config, "models": [row]}, tmp_path)
+    assert Image.open(tmp_path / "model-00/annotated.png").tobytes() == image.tobytes()
+
 
 CONFIG = dict(
     strategy="binary",

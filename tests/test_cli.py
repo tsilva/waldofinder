@@ -32,3 +32,16 @@ def test_cli_exposes_reasoning_effort():
         ]
     )
     assert args.reasoning_effort == "high" and args.max_tokens == 8192
+
+
+def test_direct_box_preview_exports_one_full_resolution_image(tmp_path):
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (17, 11), "white").save(scene)
+    output = tmp_path / "direct-preview"
+    args = parser().parse_args(
+        ["preview", str(scene), "--strategy", "bbox", "--tiles", "200", "--output", str(output)]
+    )
+    assert execute(args) == 0
+    rows = json.loads((output / "regions.json").read_text())
+    assert len(rows) == 1 and rows[0]["crop_box"] == [0, 0, 17, 11]
+    assert Image.open(output / "crops/root.jpg").size == (17, 11)

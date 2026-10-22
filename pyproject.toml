@@ -8,7 +8,11 @@ version = "0.1.0"
 description = "Compare vision-language models on grid and binary-partition Waldo searches."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.28,<1", "pillow>=11,<13"]
+dependencies = [
+    "httpx>=0.28,<1",
+    "pillow>=11,<13",
+    "pymupdf>=1.26,<2",
+]
 
 [project.scripts]
 waldofinder = "waldofinder.cli:main"

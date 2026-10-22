@@ -8,12 +8,21 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .dashboard import TERMINAL, Dashboard, DashboardError
-from .provider import IMAGE_DETAIL, PROMPT, PROMPT_VERSION, REFERENCE_DETAIL
+from .provider import (
+    IMAGE_DETAIL,
+    LOCALIZATION_PROMPT,
+    LOCALIZATION_VERSION,
+    PROMPT,
+    PROMPT_VERSION,
+    REFERENCE_DETAIL,
+)
+from .reference import distractor_manifest
 
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {
     "/": "index.html",
     "/app.js": "app.js",
+    "/hosted.js": "hosted.js",
     "/style.css": "style.css",
     "/favicon.ico": "brand/favicon.ico",
     **{
@@ -109,14 +118,22 @@ class Handler(BaseHTTPRequestHandler):
                 sample = app.image_info("sample")
             try:
                 reference = app.reference().manifest | {"url": "/api/reference"}
+                distractors = {
+                    name: meta | {"url": f"/api/reference/{name}"}
+                    for name, meta in distractor_manifest(app.distractors()).items()
+                }
             except DashboardError:
                 reference = None
+                distractors = {}
             self.json(
                 {
                     "token": self.server.token,
                     "reference": reference,
+                    "distractors": distractors,
                     "prompt": PROMPT,
                     "prompt_version": PROMPT_VERSION,
+                    "localization_prompt": LOCALIZATION_PROMPT,
+                    "localization_prompt_version": LOCALIZATION_VERSION,
                     "image_detail": IMAGE_DETAIL,
                     "reference_detail": REFERENCE_DETAIL,
                     "sample": sample,
@@ -127,6 +144,10 @@ class Handler(BaseHTTPRequestHandler):
                     "replay_available": app.sample_run() is not None,
                 }
             )
+        elif url.path in ("/api/reference/wenda", "/api/reference/odlaw"):
+            raw = app.distractors()[parts[-1]].png
+            self.headers_for(200, "image/png", len(raw))
+            self.wfile.write(raw)
         elif url.path == "/api/reference":
             raw = app.reference().png
             self.headers_for(200, "image/png", len(raw))
@@ -178,7 +199,7 @@ class Handler(BaseHTTPRequestHandler):
                 path = (session.folder / relative).resolve()
                 if (
                     not path.is_relative_to(session.folder.resolve())
-                    or path.suffix not in {".png", ".json", ".csv"}
+                    or path.suffix not in {".png", ".jpg", ".jpeg", ".json", ".csv"}
                     or not path.is_file()
                 ):
                     raise DashboardError("Artifact not found.", 404)
@@ -225,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
                     if parts[3] == "stop":
                         self.json(app.stop(parts[2]))
                     elif parts[3] == "review":
-                        self.json(app.review(parts[2], payload))
+                        self.json(app.review(parts[2], payload, include_metrics=True))
                     else:
                         raise DashboardError("Not found.", 404)
                 else:

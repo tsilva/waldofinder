@@ -94,6 +94,11 @@ def prepare(source_run, region_id, repeats, expected, output):
     output.mkdir(parents=True, exist_ok=False)
     (output / "crop.png").write_bytes(raw)
     shutil.copyfile(source_run / "reference.png", output / "reference.png")
+    for name, meta in session.get("distractors", {}).items():
+        filename = f"{name}-reference.png"
+        if name not in ("wenda", "odlaw") or meta["file"] != filename:
+            raise ValueError("Invalid saved distractor")
+        shutil.copyfile(source_run / filename, output / filename)
     return {
         "experiment": "exact-crop-repeats-v1",
         "created_at": datetime.now(UTC).isoformat(),
@@ -105,6 +110,7 @@ def prepare(source_run, region_id, repeats, expected, output):
         "crop_sha256": sha(raw),
         "expected": expected,
         "reference": session["reference"],
+        "distractors": session.get("distractors", {}),
         "prompt": PROMPT,
         "prompt_version": PROMPT_VERSION,
         "models": [m["model"] for m in session["models"]],
@@ -143,6 +149,9 @@ def live(output, record):
         ]
         + (["--structured"] if settings["structured"] else [])
     )
+    args.distractor_references = {
+        name: output / meta["file"] for name, meta in record.get("distractors", {}).items()
+    }
     args.model_capabilities = public_models()
     for model in record["models"]:
         capability = args.model_capabilities.get(model, {})
@@ -156,6 +165,10 @@ def live(output, record):
     try:
         if provider.reference.sha256 != record["reference"]["sha256"]:
             raise ValueError("Reference bytes changed.")
+        if {name: ref.sha256 for name, ref in provider.distractors.items()} != {
+            name: meta["sha256"] for name, meta in record.get("distractors", {}).items()
+        }:
+            raise ValueError("Distractor reference bytes changed.")
         record["model_capabilities"] = {m: args.model_capabilities[m] for m in record["models"]}
         jobs = [(model, i) for model in record["models"] for i in range(1, record["repeats"] + 1)]
         random.Random(20261020).shuffle(jobs)

@@ -7,11 +7,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/tsilva/waldofinder/actions/workflows/tests.yml"><img src="https://github.com/tsilva/waldofinder/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
+  <a href="https://github.com/tsilva/waldofinder/actions/workflows/ci.yml"><img src="https://github.com/tsilva/waldofinder/actions/workflows/ci.yml/badge.svg?branch=main" alt="Tests"></a>
   <a href="https://github.com/tsilva/waldofinder/blob/main/pyproject.toml"><img src="https://img.shields.io/badge/Python-3.11%2B-blue" alt="Python 3.11 or newer"></a>
 </p>
 
-Waldofinder is a local experiment lab for people evaluating vision-language
+Waldofinder is an experiment lab for people evaluating vision-language
 models: AI models that answer questions about images. Compare how they search
 for Waldo in the same crowded scene, inspect the exact crops they receive, and
 save your own reviews alongside their predictions.
@@ -19,6 +19,23 @@ save your own reviews alongside their predictions.
 Use the browser dashboard to compare a fixed grid with recursive binary
 partitioning, which repeatedly splits promising regions. The CLI can also
 export crops offline or run repeatable comparisons.
+
+Choose **Mode → Direct bounding box** to send the full image once to each model
+and draw its proposed Waldo location. Each model has its own box colour; click a
+box or model badge to inspect the coordinates and evidence.
+
+## Hosted app
+
+The Vercel deployment is configured for [waldofinder.tsilva.eu](https://waldofinder.tsilva.eu).
+Visitors can run searches using the server's production OpenRouter key; keys
+stay in Infisical and Vercel Functions. Images and results are saved in each
+visitor's browser, with JSON export. Keep the tab open while a search runs.
+
+Hosted limits: 3 MB / 40 megapixels per source image, 32 calls per model,
+8,192 output tokens per call, and a three-minute scheduling window. In-flight
+calls can finish after that window. Images are never automatically downscaled.
+The local dashboard below retains its larger limits, filesystem artifacts and
+reconnection support. See [hosting and delivery](docs/production-delivery.md).
 
 ## Quick start
 
@@ -29,6 +46,10 @@ or WebP scene you have permission to use. From the repository root:
 uv --config-file uv.toml sync --locked
 curl --fail --location https://waldo.candlewick.com/images/waldo-wave.jpg \
   --output data/waldo-reference.jpg
+curl --fail --location https://waldo.candlewick.com/pdf/WaldoCharacterSheets20.pdf \
+  --output /tmp/WaldoCharacterSheets20.pdf
+# Requires Poppler's pdftoppm (for example: brew install poppler).
+uv --config-file uv.toml run python -m experiments.extract_distractors /tmp/WaldoCharacterSheets20.pdf
 uv --config-file uv.toml run waldofinder serve --port auto
 ```
 
@@ -38,9 +59,10 @@ overlaid. **Configure** changes the strategy, regions, and models; click a
 region to inspect its crop. Loading images and previewing regions need no
 credentials or paid inference.
 
-The downloaded character illustration is a separate appearance reference;
-it does not reveal Waldo's location in your scene. It stays ignored by Git.
-To supply your own, pass `--reference /path/to/waldo.png`.
+Each call includes separate Waldo, Wenda and Odlaw appearance references. The
+prompt explicitly excludes Wenda and Odlaw and accounts for partial occlusion.
+These standalone examples reveal no scene locations and stay ignored by Git.
+To supply your own, pass `--reference`, `--wenda-reference` and `--odlaw-reference`.
 See [test-image provenance](data/README.md).
 
 For live searches, first configure OpenRouter access through
@@ -59,9 +81,12 @@ and the selected provider and incur API charges.
 - **Inspect the evidence.** Open a crop to see the prediction and reason.
   **Present**, **Absent**, and **Unsure** save your judgment independently;
   **Mark Waldo** records a reference coordinate.
-- **Keep reproducible results.** History reconnects to an active run after a
-  refresh. JSON exports and local run files preserve settings, prompts,
+- **Keep reproducible results.** The local dashboard reconnects to an active run after a
+  refresh; hosted history stores received observations in your browser. JSON exports and local run files preserve settings, prompts,
   reference provenance, predictions, and human reviews.
+- **Compare reviewed results.** A post-run panel shows per-model TP/FP/TN/FN,
+  recall (sensitivity/TPR), specificity (TNR), precision, accuracy and F1.
+  Rates update with your crop reviews; coverage, abstentions and errors remain visible.
 
 New live searches request `original` detail for search images and `auto` for the
 separate appearance reference. History and crop review show the requested detail.
@@ -83,10 +108,14 @@ choose a new output directory for every run.
 
 ## Further reading
 
+- [Codex benchmark skill](.agents/skills/waldo-benchmark/SKILL.md): the project
+  workflow for reproducible experiments and visual verification.
 - [Usage and reference](docs/usage.md): authentication, grid and binary
   strategies, prompts, image detail, saved artifacts, and development checks.
 - [Experiment reports](docs/usage.md#results): matched comparisons and their
   limitations, including cases where binary pruning missed the target.
+- [19-scene Gemini BSP test](reports/2026-10-21-gemini-bsp-scenes.md): seven
+  verified finds, six model misses and six searches inconclusive after gateway errors.
 - [Brand assets](image-assets/manifest.json): logo, text-free icons, favicons,
   and social artwork. The dashboard bundles its header icon, browser icons,
   web manifest, and social-image metadata.

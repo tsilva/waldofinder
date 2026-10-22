@@ -13,3 +13,7 @@ data/*
 !data/README.md
 .DS_Store
 dist/
+.vercel/
+public/
+hosted-assets/
+/.access.local.toml

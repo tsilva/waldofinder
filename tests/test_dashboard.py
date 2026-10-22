@@ -52,7 +52,11 @@ def app(tmp_path):
     reference = tmp_path / "reference.png"
     Image.new("RGB", (15, 30), color="red").save(reference)
     args = Namespace(
-        runs_dir=tmp_path / "runs", image=image, reference=reference, auth="agent-vault"
+        runs_dir=tmp_path / "runs",
+        image=image,
+        reference=reference,
+        auth="agent-vault",
+        distractor_references={"wenda": reference, "odlaw": reference},
     )
     return Dashboard(args, provider_factory=Provider, model_loader=lambda: CATALOG)
 
@@ -126,8 +130,14 @@ def test_run_events_and_separate_durable_review(app):
     )
     assert review["target"] == [10, 20] and review["labels"]["0:r0c0"]["verdict"] == "absent"
     assert (session.folder / "results.json").read_bytes() == predictions
+    metrics = session.snapshot()["metrics"]["models"][0]
+    assert metrics["counts"] == dict(tp=0, fp=1, tn=0, fn=0)
+    assert metrics["rates"]["accuracy"] == 0
+    assert metrics["coverage"]["scored"] == 1 and metrics["coverage"]["unreviewed"] == 3
+    assert session.events[-1]["payload"]["metrics"]["models"][0] == metrics
     restored = Dashboard(app.args, provider_factory=Provider, model_loader=lambda: CATALOG)
     assert restored.get(state["id"]).snapshot()["review"] == review
+    assert restored.get(state["id"]).snapshot()["metrics"]["models"][0] == metrics
     assert restored.history()[0]["id"] == state["id"]
     assert restored.sample_run() is not None
     review = restored.review(
@@ -135,9 +145,67 @@ def test_run_events_and_separate_durable_review(app):
         {"label": {"model_index": 0, "region_id": "r0c0", "verdict": "clear"}, "target": None},
     )
     assert not review["labels"] and review["target"] is None
+    assert restored.get(state["id"]).snapshot()["metrics"]["models"][0]["rates"]["accuracy"] is None
     for point in [[-1, 5], [81, 0], [1.2, 2], [1], "point"]:
         with pytest.raises(DashboardError):
             app.review(state["id"], {"target": point})
+
+
+def test_direct_localization_configuration_artifacts_and_reload(app):
+    captured = []
+
+    class Localizer(Provider):
+        def __init__(self, args):
+            captured.append(args.strategy)
+
+        def classify(self, model, image):
+            assert image.size == (81, 63)
+            return super().classify(model, image) | {"bbox": [100, 200, 300, 400]}
+
+    app.provider_factory = Localizer
+    config = payload(strategy="bbox")
+    preview = app.preview(config)["regions"]
+    assert len(preview) == 1 and preview[0]["crop_box"] == (0, 0, 81, 63)
+    session = app.get(app.start(config)["id"])
+    state = finished(session)
+    assert captured == ["bbox"] and state["config"]["strategy"] == "bbox"
+    assert state["prompt_version"] == "waldo-direct-localization-v1"
+    assert "x_min, y_min, x_max, y_max" in state["prompt"]
+    assert state["metrics"]["unit"] == "full_image_decision"
+    model = state["models"][0]
+    assert model["summary"]["requests"] == 1
+    assert model["regions"]["root"]["bbox_pixels"] == [8, 12, 25, 26]
+    assert model["regions"]["root"]["crop"] == "crops/root.jpg"
+    assert Image.open(session.folder / "model-00/crops/root.jpg").size == (81, 63)
+    saved = json.loads((session.folder / "results.json").read_text())
+    assert saved["prompt_version"] == state["prompt_version"]
+    # Exercise the CLI-style history importer as well as saved dashboard sessions.
+    (session.folder / "session.json").rename(session.folder / "saved-session.json")
+    app.sessions.clear()
+    restored = app.get(state["id"]).snapshot()
+    assert restored["models"][0]["regions"]["root"]["bbox_pixels"] == [8, 12, 25, 26]
+    assert restored["config"]["strategy"] == "bbox"
+
+
+def test_direct_localization_exact_jpeg_is_available_through_artifact_route(app):
+    class Localizer(Provider):
+        def classify(self, model, image):
+            return super().classify(model, image) | {"bbox": [0, 0, 1000, 1000]}
+
+    app.provider_factory = Localizer
+    session = app.get(app.start(payload(strategy="bbox"))["id"])
+    state = finished(session)
+    server = Server(0, app)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with httpx.Client(base_url=server.origin, trust_env=False) as client:
+            response = client.get(f"/api/runs/{state['id']}/files/model-00/crops/root.jpg")
+            assert response.status_code == 200
+            assert response.headers["content-type"] == "image/jpeg"
+            assert response.content == (session.folder / "model-00/crops/root.jpg").read_bytes()
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_legacy_models_cannot_start_or_replay(app, monkeypatch):
@@ -238,7 +306,10 @@ def test_http_sse_csrf_and_artifact_boundary(app):
             reference_response = client.get(bootstrap["reference"]["url"])
             assert reference_response.headers["content-type"] == "image/png"
             assert reference_response.content == app.reference().png
-            assert bootstrap["prompt_version"] == "waldo-reference-occlusion-v2"
+            for name in ("wenda", "odlaw"):
+                ref = bootstrap["distractors"][name]
+                assert client.get(ref["url"]).content == app.distractors()[name].png
+            assert bootstrap["prompt_version"] == "waldo-distractor-occlusion-v3"
             assert bootstrap["image_detail"] == "original"
             assert bootstrap["reference_detail"] == "auto"
             assert client.post("/api/runs", json=payload()).status_code == 403
@@ -255,6 +326,16 @@ def test_http_sse_csrf_and_artifact_boundary(app):
                 if line.startswith("data: ")
             ]
             assert data and data[0]["seq"] == 2 and data[-1]["type"] == "run_finished"
+            assert data[-1]["payload"]["metrics"]["models"][0]["coverage"]["scored"] == 0
+            reviewed = client.post(
+                f"/api/runs/{state['id']}/review",
+                json={"label": {"model_index": 0, "region_id": "r0c0", "verdict": "absent"}},
+                headers=headers,
+            ).json()
+            assert reviewed["labels"]["0:r0c0"]["verdict"] == "absent"
+            assert reviewed["metrics"]["models"][0]["counts"]["fp"] == 1
+            exported = client.get(f"/api/runs/{state['id']}").json()
+            assert exported["metrics"] == reviewed["metrics"]
             assert (
                 client.get(f"/api/runs/{state['id']}/files/input.png").headers["content-type"]
                 == "image/png"
@@ -357,7 +438,13 @@ def test_run_copies_reference_and_exports_prompt_provenance(app):
     assert hashlib.sha256(raw).hexdigest() == state["reference"]["sha256"]
     result = json.loads((session.folder / "results.json").read_text())
     assert result["reference"] == state["reference"]
-    assert result["prompt_version"] == "waldo-reference-occlusion-v2"
+    assert result["distractors"] == state["distractors"]
+    for name, meta in state["distractors"].items():
+        assert (
+            hashlib.sha256((session.folder / meta["file"]).read_bytes()).hexdigest()
+            == meta["sha256"]
+        )
+    assert result["prompt_version"] == "waldo-distractor-occlusion-v3"
     assert "partially occluded" in result["prompt"]
     app.args.reference.write_bytes(b"changed")
     assert (session.folder / "reference.png").read_bytes() == raw
@@ -411,3 +498,25 @@ def test_high_effort_rejected_before_launch_for_unsupported_model(app):
     with pytest.raises(DashboardError, match="reasoning effort"):
         app.start(payload(reasoning_effort="high"))
     assert not list(app.root.glob("web-*"))
+
+
+def test_missing_distractor_blocks_before_creating_run(app, tmp_path):
+    app.args.distractor_references["wenda"] = tmp_path / "missing.png"
+    with pytest.raises(DashboardError, match="reference"):
+        app.start(payload())
+    assert not list(app.root.glob("web-*"))
+
+
+def test_replay_preserves_original_distractor_files_and_prompt(app):
+    original = app.get(app.start(payload())["id"])
+    state = finished(original)
+    # A later local reference change must not affect this saved run's replay.
+    app.args.reference.write_bytes(b"changed current references")
+    replay = app.get(app.start(payload(), replay=True)["id"])
+    replay_state = finished(replay)
+    assert replay_state["distractors"] == state["distractors"]
+    assert replay_state["prompt"] == state["prompt"]
+    for meta in state["distractors"].values():
+        assert (replay.folder / meta["file"]).read_bytes() == (
+            original.folder / meta["file"]
+        ).read_bytes()

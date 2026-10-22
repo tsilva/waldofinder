@@ -36,6 +36,9 @@ const S = {
     mark: false,
     reviewPending: false
 };
+const boxColors = ['#4ade80', '#60a5fa', '#c084fc', '#fb923c'];
+const modeName = config => config.strategy === 'bbox' ? 'Direct bounding box' : config.strategy === 'binary' ? 'Binary partition' : `${config.tiles} regions`;
+const directMode = () => (S.run?.config.strategy || $('strategy').value) === 'bbox';
 let previewVersion = 0,
     renderPending = false,
     configBefore = null;
@@ -74,6 +77,11 @@ function notice(text = '', error = false) {
     $('message').classList.toggle('error', error);
 }
 async function api(path, payload) {
+    if (S.hosted && path === '/api/preview') {
+        path = '/api/hosted/preview';
+        payload = {...payload, image_size: [S.image.width, S.image.height]};
+    }
+    if (S.hosted && path.startsWith('/api/runs')) return hostedAPI(path, payload);
     const response = await fetch(path, payload === undefined ? {} : {
         method: 'POST',
         headers: {
@@ -85,6 +93,75 @@ async function api(path, payload) {
     const data = await response.json();
     if (!response.ok) throw Error(data.error || 'Request failed.');
     return data;
+}
+
+async function hostedAPI(path, payload) {
+    if (path === '/api/runs') return {runs: await S.hosted.history()};
+    const parts = path.split('/'), id = decodeURIComponent(parts[3]);
+    const run = S.run?.id === id ? S.run : await S.hosted.getRun(id);
+    if (parts[4] === 'stop') {
+        S.hostedController?.abort();
+        run.status = 'cancelled';
+        await S.hosted.saveRun(run);
+    } else if (parts[4] === 'review') {
+        const state = {image_sha256: run.image_sha256, config: run.config, image: {width:run.image.width,height:run.image.height}, review: run.review, models:run.models.map(m=>({model:m.model,regions:Object.fromEntries(Object.entries(m.regions).map(([id,r])=>[id,{phase:r.phase,status:r.status,decision:r.decision,confidence:r.confidence}]))}))};
+        const saved = await api('/api/hosted/review', {state, update:payload});
+        const {metrics, ...review} = saved;
+        run.review = review;
+        run.metrics = metrics;
+        await S.hosted.saveRun(run);
+        return saved;
+    }
+    return run;
+}
+
+async function startHosted() {
+    const controller = new AbortController();
+    S.hostedController = controller;
+    try {
+        const image = await S.hosted.sourceData(S.image);
+        const response = await fetch('/api/hosted/search', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({config:config(), image}), signal:controller.signal
+        });
+        if (!response.ok) throw Error((await response.json()).error || 'Search failed.');
+        for await (const item of S.hosted.updates(response)) {
+            if (item.snapshot) {
+                const next = item.snapshot;
+                if (S.run?.id === next.id) next.models.forEach((m,i) => Object.entries(m.regions).forEach(([id,r]) => {
+                    const crop = S.run.models[i].regions[id]?.crop_data_url;
+                    if (crop) r.crop_data_url = crop;
+                }));
+                S.run = next;
+                S.loading = false;
+                S.selected = null;
+                setImage(next.image);
+                applyConfig(next);
+                renderAll();
+                localStorage.setItem('waldofinder:last-run', next.id);
+            } else if (item.event) applyEvent(item.event);
+            if (S.run && !item.heartbeat) {
+                clearTimeout(S.hostedSaveTimer);
+                const run = S.run;
+                S.hostedSaveTimer = setTimeout(() => S.hosted.saveRun(run).catch(e => notice(e.message,true)), 150);
+            }
+        }
+        if (running()) throw Error('Search connection ended early. Saved observations remain available; no automatic retry was made.');
+        clearTimeout(S.hostedSaveTimer);
+        await S.hosted.saveRun(S.run);
+    } catch (error) {
+        if (S.run && running()) {
+            S.run.status = error.name === 'AbortError' ? 'cancelled' : 'interrupted';
+            S.run.error = error.name === 'AbortError' ? null : error.message;
+            await S.hosted.saveRun(S.run).catch(e => notice(e.message,true));
+        }
+        if (error.name !== 'AbortError') notice(error.message,true);
+    } finally {
+        clearTimeout(S.hostedSaveTimer);
+        S.hostedController = null;
+        S.loading = false;
+        renderAll();
+    }
 }
 
 function config() {
@@ -106,9 +183,16 @@ function config() {
 function renderConfig() {
     $('grid-options').hidden = $('strategy').value !== 'grid';
     $('binary-options').hidden = $('strategy').value !== 'binary';
+    const direct = $('strategy').value === 'bbox';
+    $('bbox-options').hidden = !direct;
+    $('request-cap-field').hidden = direct;
+    $('request-limit-pair').classList.toggle('single', direct);
+    $('overlap').closest('label').hidden = direct;
+    $('prompt-preview').textContent = S.prompts?.[direct ? 'bbox' : 'grid'] || '';
+    $('reference-mode-note').textContent = `Each call receives Waldo, Wenda and Odlaw references followed by the ${direct ? 'full image' : 'search crop'}. Wenda and Odlaw are excluded. Search detail: original. Reference detail: auto.${direct ? ' Box coordinates are normalized xyxy, 0–1000.' : ' Only the search crop counts as a detection.'}`;
     const c = config(),
         count = S.models.length;
-    const cap = c.strategy === 'grid' ? Math.min(c.tiles, c.max_requests) : Math.min(c.max_requests, 2 ** (c.max_depth + 1) - 2);
+    const cap = direct ? 1 : c.strategy === 'grid' ? Math.min(c.tiles, c.max_requests) : Math.min(c.max_requests, 2 ** (c.max_depth + 1) - 2);
     $('estimate').textContent = `${count} model${count===1?'':'s'} · up to ${cap*count} calls · ${c.concurrency} parallel · uses API credits`;
 }
 
@@ -246,13 +330,31 @@ function renderScene() {
         }).join('');
         return `<g><rect class="region-box ${phase(active?.r)} ${S.selected===region.id?'selected':''}" x="${x}" y="${y}" width="${w}" height="${h}" tabindex="0" role="button" data-region="${esc(region.id)}" data-model="${active?.i || 0}" aria-label="Review region ${esc(region.id)}"><title>${esc(region.id)} · click a model status to review</title></rect><text class="region-label" x="${x+inset}" y="${y+inset+size}" font-size="${size}">${esc(region.id)}</text>${badges}</g>`;
     }).join('');
+    if (directMode()) $('overlay').innerHTML = renderBoundingBoxes(entries, scale);
     const target = S.run?.review?.target;
     if (target) $('overlay').insertAdjacentHTML('beforeend', `<g class="target-marker" transform="translate(${target[0]} ${target[1]}) scale(${1/scale})"><circle r="10" fill="#fff"/><circle r="7" fill="#d64b3b"/><path d="M-4 0H4M0-4V4" stroke="#fff" stroke-width="2"/></g>`);
     $('overlay').classList.toggle('marking', S.mark);
 }
 
+function renderBoundingBoxes(entries, scale) {
+    const width = S.image.width, height = S.image.height;
+    const loading = running() && entries.some(m => Object.values(m.regions).some(r => r.phase === 'processing'));
+    return (loading ? `<rect class="bbox-loading" width="${width}" height="${height}"/>` : '') + entries.map((m, index) => {
+        const record = m.regions.root || S.preview.find(r => r.region.id === 'root');
+        const state = phase(record), color = boxColors[index % boxColors.length];
+        const text = `${aliasOf(m.model,index)} · ${statusText(record)}`;
+        const title = `${nameOf(m.model)}: ${statusText(record)}`;
+        const font = 11 / scale, line = 21 / scale;
+        const badge = `<g class="bbox-status" role="button" tabindex="0" data-region="root" data-model="${index}" aria-label="${esc(title)}" transform="translate(${7/scale} ${(7+index*25)/scale})"><title>${esc(title)}</title><rect width="${Math.min(width-14/scale,font*(text.length*.63+2))}" height="${line}" rx="${3/scale}" style="stroke:${color}"/><text x="${6/scale}" y="${14/scale}" style="fill:${color}" font-size="${font}">${esc(text)}</text></g>`;
+        const box = record?.bbox_pixels;
+        if (!box || record.status === 'error' || record.decision !== 'present') return badge;
+        const [x0,y0,x1,y1] = box;
+        return badge + `<g class="bbox-proposal ${state}" role="button" tabindex="0" data-region="root" data-model="${index}" aria-label="Review ${esc(nameOf(m.model))} bounding box"><title>${esc(title)} · [${box.join(', ')}] px</title><rect x="${x0}" y="${y0}" width="${x1-x0}" height="${y1-y0}" style="stroke:${color}"/><text x="${x0+3/scale}" y="${Math.min(height-3/scale,y0+14/scale)}" font-size="${font}" style="fill:${color}">${esc(aliasOf(m.model,index))}</text></g>`;
+    }).join('');
+}
+
 function renderControls() {
-    $('mask-legend').hidden = !S.image;
+    $('mask-legend').hidden = !S.image || directMode();
     $('start-button').hidden = busy();
     $('start-button').disabled = busy() || !S.image || !S.models.length || !S.catalogReady || !S.referenceReady;
     $('stop-button').hidden = !busy();
@@ -274,7 +376,7 @@ function renderControls() {
     const reviewed = Object.keys(S.run?.review?.labels || {}).length;
     const status = S.loading ? 'Starting…' : S.run?.status || 'Ready';
     $('run-status').textContent = `${S.run?.source === 'replay' ? 'Replay · ' : ''}${status === 'stopping' ? 'Stopping…' : status[0].toUpperCase() + status.slice(1)}`;
-    $('stats').textContent = S.run ? `${done.length} calls · ${active} running · ${candidates} candidates · ${reviewed} reviewed${errors?` · ${errors} errors`:''} · $${cost.toFixed(5)}${incomplete?' + unreported':''}` : `${$('strategy').value==='grid'?`${$('tiles').value} regions`:'Binary'} · ${S.models.length} models · ${$('concurrency').value} parallel`;
+    $('stats').textContent = S.run ? `${done.length} calls · ${active} running · ${candidates} candidates · ${reviewed} reviewed${errors?` · ${errors} errors`:''} · $${cost.toFixed(5)}${incomplete?' + unreported':''}` : `${modeName(config())} · ${S.models.length} models · ${$('concurrency').value} parallel`;
     $('stats').title = $('stats').textContent;
 }
 
@@ -296,13 +398,14 @@ function renderReview() {
     if (!records.some(r => r.region.id === S.selected)) S.selected = records[0]?.region.id;
     $('review-region').innerHTML = records.map(r => `<option ${r.region.id===S.selected?'selected':''} value="${esc(r.region.id)}">${esc(r.region.id)} · ${esc(statusText(r))}</option>`).join('');
     const r = selected();
+    $('crop-box-overlay').setAttribute('hidden', '');
     if (!r) {
         $('crop-image').hidden = true;
         $('crop-decision').textContent = 'Waiting for region';
         $('crop-reason').textContent = '';
         $('crop-meta').textContent = '';
     } else {
-        const src = r.crop && S.run ? `/api/runs/${encodeURIComponent(S.run.id)}/files/${m.summary?.artifact_dir || `model-${String(S.modelIndex).padStart(2,'0')}`}/${r.crop}` : previewCrop(r);
+        const src = r.crop_data_url || (r.crop && S.run ? `/api/runs/${encodeURIComponent(S.run.id)}/files/${m.summary?.artifact_dir || `model-${String(S.modelIndex).padStart(2,'0')}`}/${r.crop}` : previewCrop(r));
         if ($('crop-image').getAttribute('src') !== src) $('crop-image').src = src;
         $('crop-image').hidden = !src;
         $('crop-decision').textContent = `${r.phase==='done' && r.status!=='error'?'Model: ':''}${statusText(r)}`;
@@ -310,6 +413,15 @@ function renderReview() {
         const detail = r.request_settings?.image_detail || (S.run ? S.run.image_detail || 'auto' : 'original');
         $('crop-meta').textContent = `${box[2]-box[0]} × ${box[3]-box[1]} px · ${detail} detail${r.latency_seconds!=null?` · ${r.latency_seconds.toFixed(2)}s`:''} · [${box.join(', ')}]`;
         $('crop-reason').textContent = r.reason || r.error || '';
+        if (r.bbox_pixels && r.status !== 'error') {
+            const [x0,y0,x1,y1] = r.bbox_pixels;
+            $('crop-box-overlay').setAttribute('viewBox', `0 0 ${box[2]-box[0]} ${box[3]-box[1]}`);
+            $('crop-box-overlay').innerHTML = `<rect x="${x0-box[0]}" y="${y0-box[1]}" width="${x1-x0}" height="${y1-y0}" style="stroke:${boxColors[S.modelIndex % boxColors.length]}"/>`;
+            $('crop-box-overlay').removeAttribute('hidden');
+            const target = S.run?.review?.target;
+            const hit = target && target[0]>=x0 && target[0]<x1 && target[1]>=y0 && target[1]<y1;
+            $('crop-meta').textContent += ` · Box [${r.bbox_pixels.join(', ')}] px${target ? ` · Marked point ${hit ? 'inside' : 'outside'} box` : ''}`;
+        }
     }
     document.querySelectorAll('[data-verdict]').forEach(button => {
         button.disabled = !S.run || r?.phase !== 'done' || S.reviewPending;
@@ -321,9 +433,39 @@ function renderReview() {
 }
 
 function renderAll() {
+    renderMetrics();
     renderControls();
     renderScene();
     renderReview();
+}
+
+function renderMetrics() {
+    const panel = $('benchmark-metrics');
+    panel.hidden = !S.run || busy() || !S.run.metrics;
+    if (panel.hidden) return;
+    const rows = S.run.metrics.models;
+    const percent = value => value == null ? '—' : `${(value * 100).toFixed(1)}%`;
+    const cells = (rates, keys) => keys.map(key => `<td>${percent(rates[key])}</td>`).join('');
+    $('metrics-title').textContent = S.run.status === 'completed' ? 'Benchmark metrics' : 'Partial benchmark metrics';
+    const scored = rows.reduce((sum, row) => sum + row.coverage.scored, 0);
+    const completed = rows.reduce((sum, row) => sum + row.coverage.completed, 0);
+    $('metrics-coverage').textContent = `${scored} / ${completed} ${directMode() ? 'image' : 'crop'} decisions scored`;
+    $('metrics-rows').innerHTML = rows.map(row => {
+        const c = row.coverage;
+        const counts = c.scored ? ['tp', 'fp', 'tn', 'fn'].map(key => row.counts[key]).join(' / ') : '—';
+        const title = `${c.reviewed} Present/Absent reviews · ${c.unreviewed} unreviewed · ${c.unsure_reviews} unsure reviews · ${c.errors} errors · ${c.abstentions} abstentions`;
+        return `<tr><th scope="row"><button class="metric-model" data-metrics-review="${row.model_index}" aria-label="Review ${esc(nameOf(row.model))} predictions">${esc(nameOf(row.model))}</button></th><td class="confusion-counts">${counts}</td>${cells(row.rates, ['recall', 'specificity', 'precision', 'accuracy', 'f1'])}<td title="${esc(title)}">${c.scored} / ${c.completed}<small>${percent(c.scored_fraction)} coverage</small></td></tr>`;
+    }).join('');
+    $('metrics-more-rows').innerHTML = rows.map(row => `<tr><th scope="row">${esc(nameOf(row.model))}</th>${cells(row.rates, ['negative_predictive_value', 'false_positive_rate', 'false_negative_rate', 'balanced_accuracy'])}<td>${row.coverage.errors}</td><td>${row.coverage.abstentions}</td><td>${row.coverage.unreviewed}</td><td>${row.coverage.unsure_reviews}</td></tr>`).join('');
+    $('metrics-note').textContent = scored ? `Reviewed crop presence at ≥${(S.run.metrics.threshold * 100).toFixed(0)}% confidence. Errors, abstentions and unreviewed/unsure crops are excluded; — means undefined. Click a model to review.` : 'Label crop ground truth Present or Absent to calculate metrics. Click a model to review. A location marker alone does not label crops.';
+    if (directMode()) $('metrics-note').textContent = scored ? 'Scores measure full-image presence, not box correctness. Compare the proposed box with Waldo’s marked point and review the image.' : 'Review full-image presence to calculate scores. Box correctness is separate; mark Waldo to compare the proposed coordinates.';
+}
+
+function acceptReview(saved, id) {
+    if (S.run?.id !== id) return;
+    const {metrics, ...review} = saved;
+    S.run.review = review;
+    if (metrics) S.run.metrics = metrics;
 }
 
 function scheduleRender() {
@@ -370,6 +512,7 @@ function applyEvent(event) {
         if (event.type === 'run_error') notice(p.message, true);
     }
     if (event.type === 'review_updated') S.run.review = p.review;
+    if (p.metrics) S.run.metrics = p.metrics;
     scheduleRender();
 }
 
@@ -383,6 +526,7 @@ function acceptSnapshot(snapshot) {
 
 function watch() {
     S.stream?.close();
+    if (S.hosted) return;
     if (!running()) return;
     const id = S.run.id,
         stream = new EventSource(`/api/runs/${encodeURIComponent(id)}/events?since=${S.run.seq}`);
@@ -430,6 +574,11 @@ function applyConfig(run) {
 }
 async function loadRun(id) {
     const run = await api(`/api/runs/${encodeURIComponent(id)}`);
+    if (S.hosted && ['running','queued','stopping'].includes(run.status)) {
+        run.status = 'interrupted';
+        run.error = 'The previous page closed before completion. Saved observations are preserved; no automatic retry was made.';
+        await S.hosted.saveRun(run);
+    }
     S.stream?.close();
     S.run = run;
     S.selected = null;
@@ -450,6 +599,7 @@ async function start() {
     S.loading = true;
     notice();
     renderControls();
+    if (S.hosted) return startHosted();
     try {
         const run = await api('/api/runs', config());
         S.stream?.close();
@@ -486,7 +636,7 @@ async function review(value) {
                 verdict: value
             }
         });
-        if (S.run?.id === id) S.run.review = saved;
+        acceptReview(saved, id);
     } catch (error) {
         notice(error.message, true);
     } finally {
@@ -581,6 +731,15 @@ $('image-file').addEventListener('change', async () => {
     const file = $('image-file').files[0];
     if (!file) return;
     try {
+        if (S.hosted) {
+            const image = await S.hosted.imageFile(file);
+            resetRun();
+            setImage(image);
+            notice();
+            await preview();
+            $('image-file').value = '';
+            return;
+        }
         const response = await fetch('/api/images', {
             method: 'POST',
             headers: {
@@ -618,7 +777,7 @@ async function saveTarget(target) {
         const saved = await api(`/api/runs/${encodeURIComponent(id)}/review`, {
             target
         });
-        if (S.run?.id === id) S.run.review = saved;
+        acceptReview(saved, id);
         S.mark = false;
         renderAll();
     } catch (error) {
@@ -667,10 +826,18 @@ document.addEventListener('keydown', event => {
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 document.querySelectorAll('[data-verdict]').forEach(button => button.addEventListener('click', () => review(button.dataset.verdict)));
 $('clear-label').addEventListener('click', () => review('clear'));
+$('metrics-rows').addEventListener('click', event => {
+    const button = event.target.closest('[data-metrics-review]');
+    if (!button || !S.run) return;
+    const index = Number(button.dataset.metricsReview);
+    const records = Object.values(S.run.models[index].regions).filter(r => r.phase === 'done');
+    const next = records.find(r => !['present', 'absent'].includes(verdict(index, r.region.id))) || records[0];
+    if (next) inspect(next.region.id, index);
+});
 $('history-button').addEventListener('click', async () => {
     try {
         const data = await api('/api/runs');
-        $('history-list').innerHTML = data.runs.length ? data.runs.map(run => `<button class="history-row" data-run="${esc(run.id)}"><img src="${esc(run.image.url)}" alt="Saved scene"><div><strong>${esc(run.config.strategy==='grid'?`${run.config.tiles} regions`:'Binary partition')}</strong><small>${esc(run.models.map(nameOf).join(' · '))}</small><small>${run.reference?'Visual reference + occlusion':'Text only'} · ${esc(run.image_detail || 'auto')} detail · ${esc(run.config.reasoning_effort || 'low')} effort · ${esc(run.config.max_tokens)} tokens</small><small>${esc(new Date(run.created_at).toLocaleString())}</small></div><span>${esc(run.status)}</span></button>`).join('') : '<p class="subtle">No saved runs.</p>';
+        $('history-list').innerHTML = data.runs.length ? data.runs.map(run => `<button class="history-row" data-run="${esc(run.id)}"><img src="${esc(run.image.url)}" alt="Saved scene"><div><strong>${esc(modeName(run.config))}</strong><small>${esc(run.models.map(nameOf).join(' · '))}</small><small>${run.reference?'Visual reference + occlusion':'Text only'} · ${esc(run.image_detail || 'auto')} detail · ${esc(run.config.reasoning_effort || 'low')} effort · ${esc(run.config.max_tokens)} tokens</small><small>${esc(new Date(run.created_at).toLocaleString())}</small></div><span>${esc(run.status)}</span></button>`).join('') : '<p class="subtle">No saved runs.</p>';
         $('history-list').querySelectorAll('[data-run]').forEach(button => button.addEventListener('click', async () => {
             try {
                 await loadRun(button.dataset.run);
@@ -711,12 +878,34 @@ async function init() {
     renderAll();
     try {
         const boot = await api('/api/bootstrap');
+        if (boot.hosted) {
+            S.hosted = await import('./hosted.js');
+            boot.history = await S.hosted.history();
+            document.title = 'waldofinder — Vision model search lab';
+            $('max-requests').max = 32;
+            $('max-tokens').max = 8192;
+            $('timeout').max = 90;
+            $('history-button').title = 'Runs saved in this browser';
+        }
         S.token = boot.token;
+        S.prompts = {grid: boot.prompt, bbox: boot.localization_prompt};
         S.referenceReady = !!boot.reference;
         if (boot.reference) {
             $('reference-image').src = boot.reference.url;
             $('reference-image').hidden = false;
-            $('prompt-preview').textContent = boot.prompt;
+            $('distractor-images').replaceChildren(...Object.entries(boot.distractors || {}).map(([name, ref]) => {
+                const image = document.createElement('img');
+                image.src = ref.url;
+                image.alt = `${name}: distractor, not Waldo`;
+                image.style.cssText = 'height:160px;width:auto;object-fit:contain;background:white;margin:8px';
+                const figure = document.createElement('figure');
+                figure.style.cssText = 'display:inline-block;margin:0;text-align:center';
+                const caption = document.createElement('figcaption');
+                caption.textContent = `${name === 'wenda' ? 'Wenda' : 'Odlaw'} · not Waldo`;
+                figure.append(image, caption);
+                return figure;
+            }));
+            renderConfig();
         }
         if (boot.sample) setImage(boot.sample);
         let last;
@@ -728,7 +917,7 @@ async function init() {
         else if (last && boot.history.some(run => run.id === last)) await loadRun(last);
         else await preview();
         renderAll();
-        if (!S.referenceReady) notice('Waldo reference missing. Restart the server with --reference /path/to/waldo.png.', true);
+        if (!S.referenceReady) notice('Character references missing. Supply Waldo, Wenda and Odlaw reference files; see docs/usage.md.', true);
         refreshModels();
     } catch (error) {
         notice(error.message, true);

@@ -16,15 +16,15 @@ from .credentials import CredentialError
 from .geometry import Region, grid
 from .provider import (
     IMAGE_DETAIL,
-    PROMPT,
-    PROMPT_VERSION,
     REASONING_EFFORTS,
     REFERENCE_DETAIL,
     OpenRouter,
+    encode_search_image,
+    prompt_for_strategy,
     public_models,
     supports_effort,
 )
-from .reference import DEFAULT_REFERENCE
+from .reference import DEFAULT_REFERENCE, distractor_manifest
 from .report import write_report
 from .search import search_models
 
@@ -36,6 +36,10 @@ def parser():
     ui = commands.add_parser("serve", help="Open the local live experiment dashboard")
     ui.add_argument("--port", default="auto")
     ui.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
+    for name in ("wenda", "odlaw"):
+        ui.add_argument(
+            f"--{name}-reference", type=Path, default=Path(f"data/{name}-reference.png")
+        )
     ui.add_argument("--image", type=Path, default=Path("data/beach.png"))
     ui.add_argument("--runs-dir", type=Path, default=Path("runs"))
     ui.add_argument("--auth", choices=("agent-vault", "infisical"), default="agent-vault")
@@ -50,7 +54,7 @@ def parser():
             name, help="Run paid requests" if name == "run" else "Export crops offline"
         )
         p.add_argument("image", type=Path)
-        p.add_argument("--strategy", choices=("grid", "binary"), default="grid")
+        p.add_argument("--strategy", choices=("grid", "binary", "bbox"), default="grid")
         p.add_argument("--tiles", type=int, default=4, help="Exact number of fixed grid regions")
         p.add_argument("--columns", type=int, help="Regular grid column count; must divide tiles")
         p.add_argument(
@@ -76,6 +80,12 @@ def parser():
             help="Hard API attempt cap PER MODEL; no retries",
         )
         p.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
+        for character in ("wenda", "odlaw"):
+            p.add_argument(
+                f"--{character}-reference",
+                type=Path,
+                default=Path(f"data/{character}-reference.png"),
+            )
         p.add_argument("--threshold", type=float, default=0.7)
         p.add_argument("--all-candidates", action="store_true")
         p.add_argument(
@@ -192,22 +202,30 @@ def execute(args):
             manifest = []
             for region in regions:
                 box = region.padded(image.size, args.overlap)
-                image.crop(box).save(crop_dir / f"{region.id}.png")
+                crop = image.crop(box)
+                if args.strategy == "bbox":
+                    encoded, _ = encode_search_image(crop, localization=True)
+                    (crop_dir / f"{region.id}.jpg").write_bytes(encoded)
+                else:
+                    crop.save(crop_dir / f"{region.id}.png")
                 manifest.append({"id": region.id, "box": region.box, "crop_box": box})
             (output / "regions.json").write_text(json.dumps(manifest, indent=2) + "\n")
         else:
             (output / "reference.png").write_bytes(provider.reference.png)
+            for name, reference in provider.distractors.items():
+                (output / f"{name}-reference.png").write_bytes(reference.png)
             result = {
                 "version": __version__,
-                "prompt_version": PROMPT_VERSION,
+                "prompt_version": prompt_for_strategy(args.strategy)[1],
                 "reference": provider.reference.manifest,
+                "distractors": distractor_manifest(provider.distractors),
                 "image_detail": IMAGE_DETAIL,
                 "reference_detail": REFERENCE_DETAIL,
                 "created_at": datetime.now(UTC).isoformat(),
                 "image_sha256": hashlib.sha256(raw).hexdigest(),
                 "image_size": image.size,
                 "config": config,
-                "prompt": PROMPT,
+                "prompt": prompt_for_strategy(args.strategy)[0],
                 "models": [],
             }
             completed = {}

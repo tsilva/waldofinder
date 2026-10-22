@@ -1,7 +1,30 @@
 """Integer, half-open regions in original-image coordinates."""
 
 from dataclasses import dataclass
-from math import isqrt, sqrt
+from math import ceil, floor, isfinite, isqrt, sqrt
+
+
+def validate_bbox(box):
+    """Normalized xyxy coordinates; reject ambiguous, inverted or out-of-range boxes."""
+    if (
+        not isinstance(box, list)
+        or len(box) != 4
+        or any(type(v) not in (int, float) or not isfinite(v) or not 0 <= v <= 1000 for v in box)
+        or box[0] >= box[2]
+        or box[1] >= box[3]
+    ):
+        raise ValueError("Use a nonempty xyxy box in the 0–1000 coordinate space.")
+
+
+def bbox_to_pixels(box, size):
+    validate_bbox(box)
+    w, h = size
+    return [
+        floor(box[0] * w / 1000),
+        floor(box[1] * h / 1000),
+        ceil(box[2] * w / 1000),
+        ceil(box[3] * h / 1000),
+    ]
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,14 @@
+{
+  "repository": "tsilva/waldofinder",
+  "githubRepositoryId": 1427252678,
+  "identityId": "fa2d876f-5fa8-4ea8-8948-3b1a962f0128",
+  "infisicalProjectId": "43228ca5-1edf-4c4c-bffe-e4c6194f4334",
+  "secretNames": [
+    "OPENROUTER_API_KEY"
+  ],
+  "configNames": [],
+  "destination": "vercel",
+  "vercelProjectId": "prj_9JcFTUe60qgFgxkAazfm01UcpXnA",
+  "vercelProjectName": "waldofinder",
+  "vercelTeamId": "team_eE2Iv7IMqPOx8ZVN2xNfR2f0"
+}

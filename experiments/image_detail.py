@@ -16,8 +16,6 @@ from PIL import Image, ImageDraw
 
 from waldofinder.cli import parser
 from waldofinder.provider import (
-    PROMPT,
-    REFERENCE_LABEL,
     SEARCH_LABEL,
     OpenRouter,
     public_models,
@@ -25,17 +23,10 @@ from waldofinder.provider import (
 )
 
 MODELS = ["google/gemini-4-argon", "openai/gpt-6.1-sol"]
-BOX_PROMPT = (
-    PROMPT[: PROMPT.index("Return only a JSON object with:")]
-    + """Return only a JSON object with decision, confidence, reason, and bbox.
-For present, bbox must tightly enclose the visible Waldo character in the SEARCH CROP.
-Use [x_min, y_min, x_max, y_max], normalized to 0–1000 on the SEARCH CROP's width
-and height, with origin at its top-left. Include the visible head, torso and limbs
-where identifiable; do not enclose unrelated people or the entire scene.
-For absent or uncertain, bbox must be null. The REFERENCE must never supply a box.
-Confidence is confidence in the chosen decision, from 0 to 1, not a calibrated probability.
-"""
-)
+# Historical baseline is immutable even when the app prompt changes.
+BOX_PROMPT = Path(__file__).with_name("occlusion-v2-box-prompt.txt").read_text()
+REFERENCE_LABEL = "REFERENCE — appearance example only; do not search or count this image."
+
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -195,6 +186,55 @@ def safe_usage(value):
     return result
 
 
+def safe_error(error):
+    """Diagnose rejected calls with fixed labels, never provider error text."""
+    if not isinstance(error, dict):
+        return {}
+    code = error.get("code")
+    result = {"code": code} if type(code) is int and 0 <= code <= 9999 else {}
+    metadata = error.get("metadata") or {}
+    text = str(error.get("message", ""))[:10000]
+    if isinstance(metadata, dict):
+        text += str(metadata.get("raw", ""))[:10000]
+    labels = {
+        "schema": ("schema", "response_format", "structured", "minItems", "maxItems"),
+        "image_detail": ("image", "detail", "resolution", "original"),
+        "reasoning": ("thinking", "reasoning", "effort", "budget_tokens"),
+        "provider_routing": ("endpoint", "provider", "routing"),
+        "auth_or_policy": ("unauthorized", "forbidden", "permission", "not allowed", "policy"),
+        "rate_or_capacity": ("rate limit", "overloaded", "capacity"),
+        "unsupported_parameter": (
+            "unsupported",
+            "not supported",
+            "unknown parameter",
+            "unrecognized",
+        ),
+    }
+    result["categories"] = [
+        key for key, words in labels.items() if any(word.lower() in text.lower() for word in words)
+    ]
+    result["parameter_names"] = [
+        key
+        for key in (
+            "minItems",
+            "maxItems",
+            "anyOf",
+            "additionalProperties",
+            "budget_tokens",
+            "max_tokens",
+            "temperature",
+            "media_resolution",
+            "original",
+            "debug",
+            "stream_options",
+            "reasoning_effort",
+            "response_format",
+        )
+        if key.lower() in text.lower()
+    ]
+    return result
+
+
 def evaluate(answer, case):
     if answer["decision"] != "present":
         return {"presence_correct": answer["decision"] == case["expected"], "localized": False}
@@ -269,9 +309,9 @@ def prepare(output, repeats):
     }
 
 
-def save(output, record):
+def save(output, record, name="results.json"):
     summaries = []
-    for model in MODELS:
+    for model in record["models"]:
         for detail in record["settings"]["details"]:
             rows = [
                 r for r in record["observations"] if r["model"] == model and r["detail"] == detail
@@ -302,9 +342,30 @@ def save(output, record):
                 }
             )
     record["summary"] = summaries
-    temp = output / "results.tmp"
+    temp = (output / name).with_suffix(".tmp")
     temp.write_text(json.dumps(record, indent=2, allow_nan=False) + "\n")
-    temp.replace(output / "results.json")
+    temp.replace(output / name)
+
+
+def experiment_distractors(record, output):
+    content = []
+    for ref in record.get("distractors", {}).values():
+        raw = (output / ref["file"]).read_bytes()
+        if sha(raw) != ref["sha256"]:
+            raise ValueError("Saved distractor bytes changed")
+        content.extend(
+            [
+                {"type": "text", "text": ref["label"]},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64," + base64.b64encode(raw).decode("ascii"),
+                        "detail": "auto",
+                    },
+                },
+            ]
+        )
+    return content
 
 
 def request(provider, record, output, job):
@@ -324,12 +385,13 @@ def request(provider, record, output, job):
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": BOX_PROMPT},
+                    {"type": "text", "text": record.get("prompt", BOX_PROMPT)},
                     {"type": "text", "text": REFERENCE_LABEL},
                     {
                         "type": "image_url",
                         "image_url": {"url": provider.reference_data_url, "detail": "auto"},
                     },
+                    *experiment_distractors(record, output),
                     {"type": "text", "text": SEARCH_LABEL},
                     {
                         "type": "image_url",
@@ -341,7 +403,11 @@ def request(provider, record, output, job):
         "max_tokens": 8192,
         "reasoning": {"effort": "high", "exclude": True},
         "provider": {
-            "only": ["Google" if model.startswith("google/") else "OpenAI"],
+            "only": [
+                {"google": "Google", "openai": "OpenAI", "anthropic": "Anthropic"}[
+                    model.split("/")[0]
+                ]
+            ],
             "allow_fallbacks": False,
             "require_parameters": True,
         },
@@ -363,7 +429,12 @@ def request(provider, record, output, job):
         with provider.client.stream(
             "POST", "https://openrouter.ai/api/v1/chat/completions", json=body
         ) as response:
+            row["http_status"] = response.status_code
             if response.status_code != 200:
+                try:
+                    row["error_diagnostic"] = safe_error(response.json().get("error"))
+                except (ValueError, AttributeError):
+                    pass
                 row["error"] = f"HTTP {response.status_code}; body suppressed; no retry."
                 return row
             for line in response.iter_lines():
@@ -374,6 +445,7 @@ def request(provider, record, output, job):
                     break
                 payload = json.loads(data)
                 if "error" in payload:
+                    row["error_diagnostic"] = safe_error(payload["error"])
                     raise ValueError("Stream provider error")
                 debug = payload.get("debug")
                 if isinstance(debug, dict) and "echo_upstream_body" in debug:
@@ -405,7 +477,19 @@ def request(provider, record, output, job):
         answer = parse_answer("".join(texts))
         row.update(answer)
         row["evaluation"] = evaluate(answer, record["cases"][case])
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+    except httpx.HTTPError as error:
+        message = str(error).lower()
+        row["error"] = "Transport failed before a usable response; no retry."
+        row["error_category"] = (
+            "expired_certificate"
+            if "certificate" in message and "expired" in message
+            else "tls_verification"
+            if "certificate" in message
+            else "timeout"
+            if isinstance(error, httpx.TimeoutException)
+            else "transport"
+        )
+    except (ValueError, KeyError, TypeError):
         row["error"] = "Invalid, incomplete or failed response; raw payload suppressed; no retry."
     finally:
         row["latency_seconds"] = round(time.monotonic() - started, 4)
@@ -424,7 +508,7 @@ def live(output, record, probe=False):
             "run",
             str(output / "positive.png"),
             "--model",
-            MODELS[0],
+            record["models"][0],
             "--reference",
             str(output / "reference.png"),
             "--reasoning-effort",
@@ -436,14 +520,23 @@ def live(output, record, probe=False):
             "--structured",
         ]
     )
+    # Historical experiments construct their exact inputs separately.
+    args.distractor_references = {}
     args.model_capabilities = public_models()
-    if any(not supports_effort(args.model_capabilities.get(m, {}), "high") for m in MODELS):
+    if any(
+        not supports_effort(args.model_capabilities.get(m, {}), "high") for m in record["models"]
+    ):
         raise ValueError("Required model/effort unavailable")
-    record["capabilities"] = {m: args.model_capabilities[m] for m in MODELS}
+    if any(
+        "structured_outputs" not in args.model_capabilities[m].get("supported_parameters", [])
+        for m in record["models"]
+    ):
+        raise ValueError("Required structured output unavailable")
+    record["capabilities"] = {m: args.model_capabilities[m] for m in record["models"]}
     jobs = [
         (m, d, c, r)
-        for m in MODELS
-        for d in ("auto", "original")
+        for m in record["models"]
+        for d in record["settings"]["details"]
         for c in CASES
         for r in range(1, record["repeats"] + 1)
     ]
@@ -455,6 +548,9 @@ def live(output, record, probe=False):
     record["status"] = "running"
     save(output, record)
     provider = OpenRouter(args)
+    if provider.reference.sha256 != record["reference_sha256"]:
+        provider.close()
+        raise ValueError("Provider reference normalization changed saved input bytes")
     started = time.monotonic()
     try:
         with ThreadPoolExecutor(max_workers=min(32, len(jobs))) as pool:
@@ -476,10 +572,10 @@ def live(output, record, probe=False):
         provider.close()
 
 
-def render(output, record):
+def render(output, record, export_name="results.json"):
     """One contact sheet per condition; ground truth green, predictions magenta."""
-    for model in MODELS:
-        for detail in ("auto", "original"):
+    for model in record["models"]:
+        for detail in record["settings"]["details"]:
             rows = sorted(
                 [
                     r
@@ -488,6 +584,8 @@ def render(output, record):
                 ],
                 key=lambda r: (r["case"], r["replicate"]),
             )
+            if not rows:
+                continue
             sheet = Image.new("RGB", (810 * 3, 590 * math.ceil(len(rows) / 3)), "#111827")
             draw = ImageDraw.Draw(sheet)
             for i, row in enumerate(rows):
@@ -532,17 +630,24 @@ def render(output, record):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Waldo · Image detail test</title><style>
 *{box-sizing:border-box}body{margin:0;background:#0b1220;color:#eef2ff;font:14px system-ui;height:100dvh;display:flex;flex-direction:column;padding:14px;gap:10px}header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}h1{font-size:18px;margin:0}select{background:#172238;border:1px solid #42516b;color:inherit;padding:7px;border-radius:6px;max-width:100%}label{display:flex;align-items:center;gap:5px}#scene{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center}#frame{position:relative;max-width:100%;max-height:100%}img{display:block;max-width:100%;max-height:100%;object-fit:contain}svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}#metrics{display:flex;gap:15px;flex-wrap:wrap}#reason{margin:0;max-height:75px;overflow:auto;color:#cbd5e1}small{color:#94a3b8}.green{color:#4ade80}.pink{color:#f0abfc}a{color:#93c5fd}#summary{font-size:13px;color:#cbd5e1}
-</style><header><h1>Waldo · Image detail test</h1><a href="results.json">Export</a></header>
-<header><label>Model <select id="model"><option value="google/gemini-4-argon">Gemini 4 Argon</option><option value="openai/gpt-6.1-sol">GPT-6.1 Sol</option></select></label><label>Detail <select id="detail"><option>original</option><option>auto</option></select></label><label>Crop <select id="case"><option value="positive">Contains Waldo</option><option value="negative-left">Left distractors</option><option value="negative-bottom">Bottom distractors</option></select></label><label>Repeat <select id="replicate"></select></label></header>
+</style><header><h1>Waldo · Image detail test</h1><a href="EXPORT_FILE">Export</a></header>
+<header><label id="stage-control" hidden>Stage <select id="stage"><option value="after">With distractor examples</option><option value="before">Saved baseline</option></select></label><label>Model <select id="model"></select></label><label>Detail <select id="detail"></select></label><label>Crop <select id="case"><option value="positive">Contains Waldo</option><option value="negative-left">Left distractors</option><option value="negative-bottom">Bottom distractors</option></select></label><label>Repeat <select id="replicate"></select></label></header>
 <div id="summary"></div><div id="metrics"></div><div id="scene"><div id="frame"><img id="image" alt="Unmodified test crop"><svg id="boxes" viewBox="0 0 1620 1040" aria-label="Ground-truth and predicted boxes"></svg></div></div>
 <p id="reason"></p><small><span class="green">Green: frozen ground truth.</span> <span class="pink">Pink: model box.</span> Correct localization requires target point inside + IoU ≥ 0.25. Models receive unmarked images.</small>
-<script>const data=RECORD;const el=id=>document.getElementById(id);for(let i=1;i<=data.repeats;i++){const o=document.createElement('option');o.value=i;o.textContent=i;el('replicate').append(o)}
+<script>const data=RECORD;const el=id=>document.getElementById(id);el('stage-control').hidden=!data.baseline_observations;for(const m of data.models){const o=document.createElement('option');o.value=m;o.textContent=data.capabilities?.[m]?.name||m;el('model').append(o)}for(const d of data.settings.details){const o=document.createElement('option');o.value=d;o.textContent=d;el('detail').append(o)}if(data.settings.details.includes('original'))el('detail').value='original';for(let i=1;i<=data.repeats;i++){const o=document.createElement('option');o.value=i;o.textContent=i;el('replicate').append(o)}
 function box(b,color){const r=document.createElementNS('http://www.w3.org/2000/svg','rect');for(const [k,v] of Object.entries({x:b[0],y:b[1],width:b[2]-b[0],height:b[3]-b[1],fill:'none',stroke:color,'stroke-width':5}))r.setAttribute(k,v);el('boxes').append(r)}
 function fit(){const area=el('scene');const w=Math.min(area.clientWidth,area.clientHeight*1620/1040);el('frame').style.width=w+'px';el('frame').style.height=w*1040/1620+'px'}
-function show(){const m=el('model').value,d=el('detail').value,c=el('case').value,n=+el('replicate').value;const r=data.observations.find(r=>r.model===m&&r.detail===d&&r.case===c&&r.replicate===n);el('image').src=c+'.png';el('boxes').replaceChildren();if(c==='positive'){const b=data.ground_truth.source_bbox,x=data.cases[c].box[0],y=data.cases[c].box[1];box([b[0]-x,b[1]-y,b[2]-x,b[3]-y],'#4ade80')}if(r?.bbox)box([r.bbox[0]*1.62,r.bbox[1]*1.04,r.bbox[2]*1.62,r.bbox[3]*1.04],'#f0abfc');el('metrics').textContent=r?`${r.decision||'Error'} · confidence ${r.confidence??'—'} · IoU ${r.evaluation?.iou??'—'} · ${r.latency_seconds}s · $${r.usage?.cost?.toFixed(4)??'unknown'}`:'No result';el('reason').textContent=r?.reason||r?.error||'';const s=data.summary.find(s=>s.model===m&&s.detail===d);el('summary').textContent=s?`Correct boxes: ${s.localized_positives}/${data.repeats} positives · False alarms: ${s.false_positives}/${data.repeats*2} negatives · ${s.errors} errors`:'';fit()}
+function show(){const m=el('model').value,d=el('detail').value,c=el('case').value,n=+el('replicate').value;const rows=el('stage').value==='before'?data.baseline_observations:data.observations;const r=rows.find(r=>r.model===m&&r.detail===d&&r.case===c&&r.replicate===n);el('image').src=c+'.png';el('boxes').replaceChildren();if(c==='positive'){const b=data.ground_truth.source_bbox,x=data.cases[c].box[0],y=data.cases[c].box[1];box([b[0]-x,b[1]-y,b[2]-x,b[3]-y],'#4ade80')}if(r?.bbox)box([r.bbox[0]*1.62,r.bbox[1]*1.04,r.bbox[2]*1.62,r.bbox[3]*1.04],'#f0abfc');el('metrics').textContent=r?`${r.decision||'Error'} · confidence ${r.confidence??'—'} · IoU ${r.evaluation?.iou??'—'} · ${r.latency_seconds}s · $${r.usage?.cost?.toFixed(4)??'unknown'}`:'No result';el('reason').textContent=r?.reason||r?.error||'';const selected=rows.filter(r=>r.model===m&&r.detail===d);const s={localized_positives:selected.filter(r=>r.case==='positive'&&r.evaluation?.localized).length,false_positives:selected.filter(r=>r.case!=='positive'&&r.decision==='present').length,errors:selected.filter(r=>r.error).length};el('summary').textContent=s?`Correct boxes: ${s.localized_positives}/${data.repeats} positives · False alarms: ${s.false_positives}/${data.repeats*2} negatives · ${s.errors} errors`:'';fit()}
 document.querySelectorAll('select').forEach(s=>s.addEventListener('change',show));addEventListener('resize',fit);show();</script></html>"""
     (output / "review.html").write_text(
-        template.replace("RECORD", json.dumps(record).replace("<", "\\u003c"))
+        template.replace(
+            "Waldo · Image detail test",
+            "Waldo · Distractor references"
+            if record.get("distractors")
+            else "Waldo · Image detail test",
+        )
+        .replace("EXPORT_FILE", export_name)
+        .replace("RECORD", json.dumps(record).replace("<", "\\u003c"))
     )
 
 

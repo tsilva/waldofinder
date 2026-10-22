@@ -19,18 +19,18 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from . import __version__
 from .geometry import Region, grid
+from .metrics import benchmark_metrics
 from .provider import (
     IMAGE_DETAIL,
-    PROMPT,
-    PROMPT_VERSION,
     REASONING_EFFORTS,
     REFERENCE_DETAIL,
     OpenRouter,
     model_is_2026,
+    prompt_for_strategy,
     public_models,
     supports_effort,
 )
-from .reference import DEFAULT_REFERENCE, load_reference
+from .reference import DEFAULT_REFERENCE, distractor_manifest, load_distractors, load_reference
 from .report import write_report
 from .search import search_models
 
@@ -105,8 +105,8 @@ def validate_config(payload):
             raise DashboardError(f"Invalid {key}.")
     if config["reasoning_effort"] not in REASONING_EFFORTS:
         raise DashboardError("Choose low, medium or high reasoning effort.")
-    if config["strategy"] not in ("grid", "binary"):
-        raise DashboardError("Choose grid or binary search.")
+    if config["strategy"] not in ("grid", "binary", "bbox"):
+        raise DashboardError("Choose grid, binary search or direct bounding box.")
     if config["columns"] is not None and (
         type(config["columns"]) is not int or config["columns"] < 1
     ):
@@ -132,10 +132,12 @@ class Session:
 
     def snapshot(self):
         with self.condition:
-            return json.loads(json.dumps(self.state))
+            state = json.loads(json.dumps(self.state))
+            state["metrics"] = benchmark_metrics(state)
+            return state
 
     def emit(self, kind, payload=None):
-        payload = payload or {}
+        payload = dict(payload or {})
         with self.condition:
             self.state["seq"] += 1
             event = {"seq": self.state["seq"], "type": kind, "at": now(), "payload": payload}
@@ -166,6 +168,8 @@ class Session:
                 self.state.update(status=payload["status"], finished_at=now())
             elif kind == "run_error":
                 self.state.update(status="failed", error=payload["message"], finished_at=now())
+            if kind in {"run_finished", "run_error", "model_finished", "review_updated"}:
+                payload["metrics"] = benchmark_metrics(self.state)
             save_json(self.folder / "session.json", self.state)
             with (self.folder / "events.jsonl").open("a") as file:
                 file.write(json.dumps(event, allow_nan=False) + "\n")
@@ -217,6 +221,12 @@ class Dashboard:
         except ValueError as error:
             raise DashboardError(str(error)) from None
 
+    def distractors(self):
+        try:
+            return load_distractors(self.args)
+        except ValueError as error:
+            raise DashboardError(str(error)) from None
+
     def image(self, image_id):
         if image_id == "sample" and self.sample and self.sample.is_file():
             return self.sample
@@ -262,6 +272,8 @@ class Dashboard:
         regions = (
             grid(size, config["tiles"], config["columns"])
             if config["strategy"] == "grid"
+            else [Region("root", (0, 0, *size))]
+            if config["strategy"] == "bbox"
             else (Region("root", (0, 0, *size)).split() or [Region("root", (0, 0, *size))])
         )
         return {
@@ -325,6 +337,7 @@ class Dashboard:
                         prompt=result.get("prompt"),
                         prompt_version=result.get("prompt_version"),
                         reference=result.get("reference"),
+                        distractors=result.get("distractors", {}),
                         image_detail=result.get("image_detail", "auto"),
                         reference_detail=result.get("reference_detail", "auto"),
                     )
@@ -408,7 +421,7 @@ class Dashboard:
                 return session
         return None
 
-    def start(self, payload, replay=False):
+    def start(self, payload, replay=False, *, defer=False):
         config, models = validate_config(payload)
         with self.lock:
             if any(
@@ -451,6 +464,7 @@ class Dashboard:
             ):
                 raise DashboardError("A selected model does not support this reasoning effort.")
             reference = self.reference() if not replay else None
+            distractors = self.distractors() if not replay else {}
             run_id = f"web-{uuid4().hex}"
             folder = self.root / run_id
             folder.mkdir()
@@ -458,6 +472,15 @@ class Dashboard:
                 (folder / "reference.png").write_bytes(reference.png)
             elif source and (source.folder / "reference.png").is_file():
                 shutil.copyfile(source.folder / "reference.png", folder / "reference.png")
+            if replay:
+                for meta in original.get("distractors", {}).values():
+                    filename = meta["file"]
+                    if filename not in ("wenda-reference.png", "odlaw-reference.png"):
+                        raise DashboardError("Invalid saved distractor filename.")
+                    shutil.copyfile(source.folder / filename, folder / filename)
+            else:
+                for name, exemplar in distractors.items():
+                    (folder / f"{name}-reference.png").write_bytes(exemplar.png)
             raw = image_path.read_bytes()
             with Image.open(BytesIO(raw)) as loaded:
                 image = ImageOps.exif_transpose(loaded).convert("RGB")
@@ -469,9 +492,16 @@ class Dashboard:
                 source="replay" if replay else "live",
                 created_at=now(),
                 config=config,
-                prompt=original.get("prompt") if replay else PROMPT,
-                prompt_version=original.get("prompt_version") if replay else PROMPT_VERSION,
+                prompt=original.get("prompt")
+                if replay
+                else prompt_for_strategy(config["strategy"])[0],
+                prompt_version=original.get("prompt_version")
+                if replay
+                else prompt_for_strategy(config["strategy"])[1],
                 reference=original.get("reference") if replay else reference.manifest,
+                distractors=original.get("distractors", {})
+                if replay
+                else distractor_manifest(distractors),
                 image_detail=original.get("image_detail", "auto") if replay else IMAGE_DETAIL,
                 reference_detail=original.get("reference_detail", "auto")
                 if replay
@@ -506,9 +536,10 @@ class Dashboard:
             self.sessions[run_id] = session
             save_json(folder / "session.json", state)
             worker = self._replay if replay else self._run
-            threading.Thread(
-                target=worker, args=(session, source) if replay else (session,), daemon=True
-            ).start()
+            if not defer:
+                threading.Thread(
+                    target=worker, args=(session, source) if replay else (session,), daemon=True
+                ).start()
             return session.snapshot()
 
     def _run(self, session):
@@ -522,6 +553,10 @@ class Dashboard:
                     **session.state["config"],
                     "model_capabilities": self.catalog,
                     "reference": session.folder / "reference.png",
+                    "distractor_references": {
+                        name: session.folder / meta["file"]
+                        for name, meta in session.state.get("distractors", {}).items()
+                    },
                 },
             )()
             provider = self.provider_factory(args)
@@ -535,6 +570,7 @@ class Dashboard:
                 prompt=state["prompt"],
                 prompt_version=state["prompt_version"],
                 reference=state["reference"],
+                distractors=state.get("distractors", {}),
                 image_detail=state["image_detail"],
                 reference_detail=state["reference_detail"],
                 models=[],
@@ -639,7 +675,7 @@ class Dashboard:
                 session.emit("run_stopping")
         return session.snapshot()
 
-    def review(self, run_id, payload):
+    def review(self, run_id, payload, *, include_metrics=False):
         if not isinstance(payload, dict) or set(payload) - {"target", "label"} or not payload:
             raise DashboardError("Invalid review update.")
         session = self.get(run_id)
@@ -682,4 +718,8 @@ class Dashboard:
             save_json(session.folder / "review.json", review)
             session.state["review"] = review
             session.emit("review_updated", {"review": review})
-        return review
+            return (
+                review | {"metrics": benchmark_metrics(session.state)}
+                if include_metrics
+                else review
+            )

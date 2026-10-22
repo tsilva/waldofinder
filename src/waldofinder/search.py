@@ -5,8 +5,8 @@ from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict
 
-from .geometry import Region, grid
-from .provider import ProviderError
+from .geometry import Region, bbox_to_pixels, grid
+from .provider import ProviderError, encode_search_image
 
 
 def _search(image, models, provider, config, outputs, on_event, cancel, on_model_finished):
@@ -16,6 +16,8 @@ def _search(image, models, provider, config, outputs, on_event, cancel, on_model
     initial = (
         grid(image.size, config["tiles"], config["columns"])
         if config["strategy"] == "grid"
+        else [root]
+        if config["strategy"] == "bbox"
         else root.split() or [root]
     )
     states = [
@@ -54,12 +56,32 @@ def _search(image, models, provider, config, outputs, on_event, cancel, on_model
     def evaluate(index, region):
         box = region.padded(image.size, config["overlap"])
         crop = image.crop(box)
-        crop.save(outputs[index] / "crops" / f"{region.id}.png")
-        record = {"region": asdict(region), "crop_box": box, "crop": f"crops/{region.id}.png"}
+        extension = "jpg" if config["strategy"] == "bbox" else "png"
+        filename = f"crops/{region.id}.{extension}"
+        raw, _ = encode_search_image(crop, localization=config["strategy"] == "bbox")
+        (outputs[index] / filename).write_bytes(raw)
+        record = {"region": asdict(region), "crop_box": box, "crop": filename}
         emit(index, "region_started", **record)
         began = time.monotonic()
         try:
-            record.update(provider.classify(models[index], crop))
+            answer = provider.classify(models[index], crop)
+            if config["strategy"] == "bbox":
+                try:
+                    pixels = (
+                        bbox_to_pixels(answer.get("bbox"), crop.size)
+                        if answer["decision"] == "present"
+                        else None
+                    )
+                    if answer["decision"] != "present" and answer.get("bbox") is not None:
+                        raise ValueError
+                except (ValueError, KeyError, TypeError):
+                    raise ProviderError(
+                        "Invalid localization coordinates.",
+                        answer.get("generation_id"),
+                        answer.get("usage"),
+                    ) from None
+                answer["bbox_pixels"] = pixels
+            record.update(answer)
             record["status"] = "ok"
         except ProviderError as error:
             record.update(
