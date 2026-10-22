@@ -184,3 +184,30 @@ def test_flask_gateway_streams_and_serves_static(tmp_path):
         assert list(response.response) == [b'{"first":true}\n', b'{"last":true}\n']
         assert client.post("/api/echo", json={"ok": True}).json == {"ok": True}
         assert client.get("/../pyproject.toml").status_code == 404
+
+
+def test_entrypoint_loads_without_editable_project_install(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = """
+import importlib.util, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+sys.path=[p for p in sys.path if Path(p).resolve()!=root/'src']
+spec=importlib.util.spec_from_file_location('deployment_app',root/'app.py')
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with module.app.test_client() as client:
+    assert client.get('/api/health').status_code==200
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(root)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
