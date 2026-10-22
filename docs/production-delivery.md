@@ -10,7 +10,7 @@
 - GitHub reader: `fa2d876f-5fa8-4ea8-8948-3b1a962f0128`, Viewer on only this
   production vault. OIDC pins repository ID `1427252678`, owner ID `26742`,
   `refs/heads/main`, the `Production` environment and this repository's exact
-  `production-delivery.yml` workflow. Tokens expire after 900 seconds.
+  `production-delivery.yml` workflow. The subject pins GitHub’s immutable owner/repository IDs. Tokens expire after 900 seconds.
 - GitHub `Production` allows deployments from `main`. Its `VERCEL_TOKEN` must
   be scoped to this Vercel project; never copy a general CLI login into Actions.
 

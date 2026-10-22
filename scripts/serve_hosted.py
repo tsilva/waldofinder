@@ -3,12 +3,13 @@
 import argparse
 import os
 import sys
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from werkzeug.serving import make_server  # noqa: E402
+
 from waldofinder import hosted  # noqa: E402
-from waldofinder.web import STATIC_FILES  # noqa: E402
+from waldofinder.gateway import create_app  # noqa: E402
 
 
 def main():
@@ -60,31 +61,11 @@ def main():
         )
         os.environ["OPENROUTER_API_KEY"] = "synthetic-fixture-only"
 
-    class Handler(hosted.HostedHandler):
-        def do_GET(self):
-            if self.path.startswith("/api/"):
-                return super().do_GET()
-            name = STATIC_FILES.get(self.path)
-            path = (
-                hosted.ROOT / "public" / self.path.lstrip("/")
-                if not name
-                else hosted.ROOT / "src/waldofinder/static" / name
-            )
-            if not path.is_file() or not path.resolve().is_relative_to(hosted.ROOT):
-                return self.send({"error": "Not found"}, 404)
-            import mimetypes
-
-            raw = path.read_bytes()
-            self.send_response(200)
-            self.send_header(
-                "Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            )
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", 0 if args.port == "auto" else int(args.port)), Handler
+    server = make_server(
+        "127.0.0.1",
+        0 if args.port == "auto" else int(args.port),
+        create_app(hosted.HostedHandler),
+        threaded=True,
     )
     print(
         f"Hosted adapter{' · SYNTHETIC FIXTURES' if args.fixture else ''}: http://127.0.0.1:{server.server_port}",

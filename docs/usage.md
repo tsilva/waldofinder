@@ -113,8 +113,8 @@ or external frontend dependencies.
 ## Hosted Vercel app
 
 The hosted app keeps the same grid, BSP and direct-box engine and prompts.
-`api/index.py` exposes `HostedHandler`: a search runs inside one active streaming
-POST request, not a detached serverless task. A cancellation timer stops new work
+The Flask `app.py` entrypoint streams `HostedHandler` responses: a search runs inside one active streaming
+POST request, not a detached serverless task. A bounded response queue applies backpressure. A cancellation timer stops new work
 after 180 seconds; in-flight calls finish within their 90-second per-call timeout.
 The Function has a 300-second duration limit. Disconnecting cancels scheduling
 when the server detects it; already-sent requests may still be billed. There are

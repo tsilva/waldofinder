@@ -151,3 +151,36 @@ def test_preview_bbox_and_image_validation():
             hosted.decode_image(value)
     with pytest.raises(DashboardError):
         hosted.preview(configuration() | {"image_size": [999999999, 1]})
+
+
+def test_flask_gateway_streams_and_serves_static(tmp_path):
+    from http.server import BaseHTTPRequestHandler
+
+    from waldofinder.gateway import create_app
+
+    (tmp_path / "index.html").write_text("<h1>Waldo</h1>")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(b'{"first":true}\n')
+            self.wfile.flush()
+            self.wfile.write(b'{"last":true}\n')
+
+        def do_POST(self):
+            length = int(self.headers["Content-Length"])
+            raw = self.rfile.read(length)
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+
+    app = create_app(Handler, tmp_path)
+    with app.test_client() as client:
+        assert b"Waldo" in client.get("/").data
+        response = client.get("/api/stream", buffered=False)
+        assert list(response.response) == [b'{"first":true}\n', b'{"last":true}\n']
+        assert client.post("/api/echo", json={"ok": True}).json == {"ok": True}
+        assert client.get("/../pyproject.toml").status_code == 404
