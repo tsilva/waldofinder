@@ -447,8 +447,10 @@ def deploy_vercel(config, sha):
                 print("Production READY: " + deployment_id + " commit " + sha)
                 return
         time.sleep(15)
-    raise DeliveryError("Vercel release timed out; inspect build, required checks and "
-        "Production domain assignment before retrying.")
+    raise DeliveryError(
+        "Vercel release timed out; inspect build, required checks and "
+        "Production domain assignment before retrying."
+    )
 
 
 def main():
