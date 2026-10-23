@@ -27,6 +27,8 @@ box or model badge to inspect the coordinates and evidence.
 ## Hosted app
 
 The Vercel deployment is configured for [waldofinder.tsilva.eu](https://waldofinder.tsilva.eu).
+Production pushes pass secret scanning and exact-commit CI before key sync and
+deployment; direct Vercel Git builds are disabled.
 Visitors can run searches using the server's production OpenRouter key; keys
 stay in Infisical and Vercel Functions. Images and results are saved in each
 visitor's browser, with JSON export. Keep the tab open while a search runs.

@@ -27,5 +27,8 @@
       ]
     }
   ],
-  "framework": "flask"
+  "framework": "flask",
+  "git": {
+    "deploymentEnabled": false
+  }
 }

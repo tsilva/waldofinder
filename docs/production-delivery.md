@@ -19,8 +19,10 @@ The maintained installer generated the delivery runtime, tests, metadata and sou
 hashes. The workflow adds the same secret-scanning prerequisite used by the other
 projects. Delivery waits for exact-commit CI, reads only the pinned Production key,
 synchronizes it to Vercel as a Secret, then deploys that Git commit. Keep Require
-Separate Values enabled. Disable parallel Vercel Git deployments only after the
-ordered replacement succeeds; no Preview/Development keys are populated here.
+Separate Values enabled. The ordered replacement has been verified and direct
+Vercel Git deployments are disabled. The `waldofinder-github-production-delivery`
+token is project-only, expires October 24, 2027, and is stored only in GitHub’s
+main-only `Production` environment. No Preview/Development keys are populated here.
 
 The app is public. Uploaded sources and received results stay in the visitor's
 browser history; the active Function temporarily processes the source and sends
