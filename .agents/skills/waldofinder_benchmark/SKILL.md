@@ -1,5 +1,5 @@
 ---
-name: waldo-benchmark
+name: waldofinder_benchmark
 description: Run and audit reproducible Waldofinder crop comparisons, grid/BSP searches, reasoning or image-detail controls, and cross-scene evaluations. Use for experiments in this repository, including accuracy, latency and cost comparisons; ordinary dashboard styling does not require this workflow.
 ---
 

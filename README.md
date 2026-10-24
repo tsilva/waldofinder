@@ -110,7 +110,7 @@ choose a new output directory for every run.
 
 ## Further reading
 
-- [Codex benchmark skill](.agents/skills/waldo-benchmark/SKILL.md): the project
+- [Codex benchmark skill](.agents/skills/waldofinder_benchmark/SKILL.md): the project
   workflow for reproducible experiments and visual verification.
 - [Usage and reference](docs/usage.md): authentication, grid and binary
   strategies, prompts, image detail, saved artifacts, and development checks.

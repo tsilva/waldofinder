@@ -1,7 +1,7 @@
 # Waldofinder
 
 Use the project skill
-[waldo-benchmark](.agents/skills/waldo-benchmark/SKILL.md) for crop comparisons,
+[waldofinder_benchmark](.agents/skills/waldofinder_benchmark/SKILL.md) for crop comparisons,
 grid/BSP experiments, reasoning or image-detail controls, and accuracy/time/cost
 evaluation. It routes to the existing drivers and defines input freezing,
 credential handling, visual scoring and failure accounting. Ordinary UI changes
