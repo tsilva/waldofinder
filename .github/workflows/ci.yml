@@ -17,6 +17,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install 'uv==0.11.13'
       - run: uv --config-file uv.toml sync --locked
+      - run: uv --config-file uv.toml audit --frozen
       - run: uv --config-file uv.toml run pytest
       - run: uv --config-file uv.toml run ruff check .
       - run: uv --config-file uv.toml run ruff format --check .

@@ -414,11 +414,13 @@ records individual runs, and explains the remaining close-lookalike errors.
 
 ```bash
 uv --config-file uv.toml sync --locked
+uv --config-file uv.toml audit --frozen
 uv --config-file uv.toml run pytest
 uv --config-file uv.toml run ruff check .
 uv --config-file uv.toml run ruff format --check .
 ```
 
+The lock includes Pillow 13 security fixes and an updated trusted certificate bundle.
 Dependencies are locked in `uv.lock`; uv excludes packages released within the
 last seven days. Commands select `uv.toml` explicitly to avoid machine-wide configuration
 overrides; keep its age policy aligned with `pyproject.toml`. Offline tests cover geometry, branch selection, request caps,

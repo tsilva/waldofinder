@@ -108,6 +108,9 @@ uv --config-file uv.toml run waldofinder preview /path/to/scene.png \
 Success prints the output path. Open `regions.json` and `crops/` there;
 choose a new output directory for every run.
 
+Validate dependency updates with the [offline development checks](docs/usage.md#development),
+which use synthetic fixtures and mocked provider requests.
+
 ## Further reading
 
 - [Codex benchmark skill](.agents/skills/waldofinder_benchmark/SKILL.md): the project
