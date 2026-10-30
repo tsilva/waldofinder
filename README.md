@@ -124,3 +124,7 @@ which use synthetic fixtures and mocked provider requests.
 - [Brand assets](image-assets/manifest.json): logo, text-free icons, favicons,
   and social artwork. The dashboard bundles its header icon, browser icons,
   web manifest, and social-image metadata.
+
+## License
+
+[MIT License](LICENSE).

@@ -101,7 +101,7 @@ detection and full completion can differ. Shared-batch times are not isolated
 model latencies. Avoid an accuracy percentage that folds errors into misses.
 
 Provide a local visual audit with ground truth and candidate evidence. Use the
-native in-app browser to verify a newly created or changed viewer. Update the
+browser selected by the global Browser Use and Testing policy to verify a newly created or changed viewer. Update the
 existing usage/data docs and a report under `reports/` when adding a protocol or
 result. Keep source artwork and secrets out of Git. Explain condition changes,
 sample size and limits on generalization or repeatability; a single scene or run

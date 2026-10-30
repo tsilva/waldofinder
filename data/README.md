@@ -88,3 +88,7 @@ coordinates, annotation hashes and provenance in `ground-truth.json`, separately
 from model inputs. These are assistant-verified annotations, not independent human
 confirmation. All 19 scenes are included, including the studio introduction, with
 one common instruction to ignore printed portraits and reference panels.
+
+## License
+
+[MIT License](../LICENSE).
