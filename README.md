@@ -26,6 +26,8 @@ box or model badge to inspect the coordinates and evidence.
 
 ## Hosted app
 
+The public homepage at [https://waldofinder.tsilva.eu/](https://waldofinder.tsilva.eu/) is the canonical URL listed in `/sitemap.xml`.
+
 The Vercel deployment is configured for [waldofinder.tsilva.eu](https://waldofinder.tsilva.eu).
 Production pushes pass secret scanning and exact-commit CI before key sync and
 deployment; direct Vercel Git builds are disabled.
