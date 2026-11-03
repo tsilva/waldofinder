@@ -1,0 +1,8 @@
+version: 1
+websites:
+  waldofinder.tsilva.eu:
+    url: https://waldofinder.tsilva.eu/
+    availability: reachable
+    ga4: unverified
+    sentry: unverified
+    checked-on: 2026-11-03
