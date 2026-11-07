@@ -34,6 +34,7 @@ def build():
     ASSETS.mkdir(exist_ok=True)
     PUBLIC.mkdir(exist_ok=True)
     shutil.copytree(ROOT / "src/waldofinder/static", PUBLIC, dirs_exist_ok=True)
+    shutil.copyfile(PUBLIC / "brand/favicon.ico", PUBLIC / "favicon.ico")
     (ASSETS / "waldo-reference.jpg").write_bytes(download(PUBLISHER_SOURCE, PUBLISHER_SHA256))
     with pymupdf.open(stream=download(PDF_URL, PDF_SHA), filetype="pdf") as document:
         for name, (page_index, box) in {
