@@ -18,7 +18,7 @@ CI runs Python 3.11/3.14 tests and Ruff. Committed-secret scanning gates deliver
 The maintained installer generated the delivery runtime, tests, metadata and source
 hashes. The workflow adds the same secret-scanning prerequisite used by the other
 projects. Delivery waits for exact-commit CI, reads only the pinned Production key,
-synchronizes it to Vercel as a Secret, then deploys that Git commit. Keep Require
+synchronizes it to Vercel as a Secret. GitHub Actions then builds that commit, stages the prebuilt deployment and verifies it before promotion. Keep Require
 Separate Values enabled. The ordered replacement has been verified and direct
 Vercel Git deployments are disabled. The `waldofinder-github-production-delivery`
 token is project-only, expires October 24, 2027, and is stored only in GitHub’s
@@ -120,3 +120,7 @@ assignment. Required integration checks, including Clerk DNS verification,
 remain enforced. The workflow waits for assignment, fails on alias errors or
 timeout, and rechecks the current main commit before reporting `Production
 READY`. Never bypass a failed integration check to make delivery green.
+
+## Staging a prebuilt deployment
+
+Use **Actions → Production delivery → Run workflow → main** with **stage_prebuilt** selected to build and verify a Vercel deployment while production domains keep serving the live release. Leave the option clear for a production delivery.
