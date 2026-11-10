@@ -3,7 +3,14 @@ name: Production delivery
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - .github/workflows/production-delivery.yml
   workflow_dispatch:
+    inputs:
+      stage_prebuilt:
+        description: Stage and verify a GitHub-built artifact without changing production domains
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,7 +70,7 @@ jobs:
   deploy:
     name: Deploy synced commit after CI succeeds
     needs: sync
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && !inputs.stage_prebuilt
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: Production
@@ -80,3 +87,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  stage_prebuilt:
+    needs: sync
+    if: github.ref == 'refs/heads/main' && inputs.stage_prebuilt
+    uses: tsilva/.github/.github/workflows/vercel-prebuilt.yml@e11e1d0beb80276055c14630c2bc1e9515a94eaa
+    with:
+      project_id: prj_9JcFTUe60qgFgxkAazfm01UcpXnA
+      project_name: waldofinder
+      production_domains: '["waldofinder.tsilva.eu","waldofinder.vercel.app"]'
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
