@@ -157,3 +157,16 @@ test('local mode ignores inline public data and keeps its session token', async 
     assert.equal(f.state.token, 'local-token');
     assert.ok(!f.calls.includes('module'));
 });
+
+
+test('invalid inline public headers fall back without changing saved-run selection', async () => {
+    for (const inline of [null, [], {}, {...payload(), hosted: false},
+        {...payload(), token: 'unexpected-session'}, {...payload(), history: [{id: 'unexpected'}]}]) {
+        const f = fixture({inline: JSON.stringify(inline), last: 'last'});
+        assert.deepEqual(f.calls, ['/bootstrap.json', 'module']);
+        f.module.resolve(f.hosted); f.history.resolve([{id: 'last', status: 'done'}]);
+        f.boot.resolve(payload()); await f.run;
+        assert.deepEqual(f.calls.slice(-3), ['image:sample', 'restore:last', 'models']);
+        assert.equal(f.state.token, '');
+    }
+});

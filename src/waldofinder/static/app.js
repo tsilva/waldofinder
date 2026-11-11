@@ -882,7 +882,11 @@ async function init() {
             if (staticHosted) {
                 const inline = document.querySelector('#waldofinder-bootstrap');
                 if (inline) {
-                    try { return JSON.parse(inline.textContent); } catch {}
+                    try {
+                        const boot = JSON.parse(inline.textContent);
+                        if (boot?.hosted === true && boot.token === '' &&
+                            Array.isArray(boot.history) && boot.history.length === 0) return boot;
+                    } catch {}
                 }
             }
             return api(staticHosted ? '/bootstrap.json' : '/api/bootstrap');
