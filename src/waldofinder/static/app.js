@@ -877,7 +877,7 @@ async function init() {
     renderConfig();
     renderAll();
     try {
-        const boot = await api('/api/bootstrap');
+        const boot = await api(document.querySelector('meta[name="waldofinder-hosted-bootstrap"]') ? '/bootstrap.json' : '/api/bootstrap');
         if (boot.hosted) {
             S.hosted = await import('./hosted.js');
             boot.history = await S.hosted.history();

@@ -211,3 +211,46 @@ with module.app.test_client() as client:
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_static_bootstrap_matches_public_runtime_metadata(server, tmp_path, monkeypatch):
+    from scripts import build_hosted
+    from waldofinder.gateway import create_app
+
+    client, _ = server
+    public = tmp_path / "public"
+    public.mkdir()
+    source_index = build_hosted.ROOT / "src/waldofinder/static/index.html"
+    original = source_index.read_text()
+    (public / "index.html").write_text(original)
+    monkeypatch.setattr(build_hosted, "PUBLIC", public)
+    expected = client.get("/api/bootstrap").json()
+
+    build_hosted.write_bootstrap()
+
+    payload = json.loads((public / "bootstrap.json").read_text())
+    assert payload == expected
+    assert payload["token"] == "" and payload["history"] == []
+    assert "fixture-only" not in (public / "bootstrap.json").read_text()
+    assert source_index.read_text() == original
+    assert 'name="waldofinder-hosted-bootstrap"' in (public / "index.html").read_text()
+    with create_app(public_root=public).test_client() as gateway:
+        response = gateway.get("/bootstrap.json")
+        assert response.status_code == 200
+        assert response.mimetype == "application/json"
+        assert response.json == expected
+
+
+def test_static_bootstrap_rejects_session_state(tmp_path, monkeypatch):
+    from scripts import build_hosted
+
+    monkeypatch.setattr(build_hosted, "PUBLIC", tmp_path)
+    for payload in [
+        {"hosted": True, "token": "session-only", "history": []},
+        {"hosted": True, "token": "", "history": [{"id": "private-run"}]},
+        {"hosted": False, "token": "", "history": []},
+    ]:
+        monkeypatch.setattr(build_hosted, "bootstrap_payload", lambda: payload)
+        with pytest.raises(ValueError, match="must not contain session state"):
+            build_hosted.write_bootstrap()
+        assert not (tmp_path / "bootstrap.json").exists()
