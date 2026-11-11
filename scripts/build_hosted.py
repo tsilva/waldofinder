@@ -36,15 +36,21 @@ def write_bootstrap():
     payload = bootstrap_payload()
     if payload["token"] or payload["history"] or not payload["hosted"]:
         raise ValueError("Static hosted bootstrap must not contain session state.")
-    (PUBLIC / "bootstrap.json").write_text(
-        json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n"
-    )
+    serialized = json.dumps(payload, allow_nan=False, separators=(",", ":"))
+    (PUBLIC / "bootstrap.json").write_text(serialized + "\n")
     index = PUBLIC / "index.html"
     html = index.read_text()
     marker = '<meta name="waldofinder-hosted-bootstrap" content="static">'
     if "</head>" not in html:
         raise ValueError("Hosted index is missing its head boundary.")
-    index.write_text(html.replace("</head>", f"  {marker}\n</head>", 1))
+    # JSON is inert data, but HTML parsing still recognizes script end tags.
+    inline = serialized.replace("<", "\\u003c")
+    additions = (
+        f"  {marker}\n"
+        '  <link rel="modulepreload" href="/hosted.js">\n'
+        f'  <script type="application/json" id="waldofinder-bootstrap">{inline}</script>\n'
+    )
+    index.write_text(html.replace("</head>", additions + "</head>", 1))
 
 
 def build():

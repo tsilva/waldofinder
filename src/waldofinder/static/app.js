@@ -878,6 +878,15 @@ async function init() {
     renderAll();
     try {
         const staticHosted = !!document.querySelector('meta[name="waldofinder-hosted-bootstrap"]');
+        const readBootstrap = async () => {
+            if (staticHosted) {
+                const inline = document.querySelector('#waldofinder-bootstrap');
+                if (inline) {
+                    try { return JSON.parse(inline.textContent); } catch {}
+                }
+            }
+            return api(staticHosted ? '/bootstrap.json' : '/api/bootstrap');
+        };
         const readHostedHistory = async () => {
             const hosted = await import('./hosted.js');
             return {hosted, history: await hosted.history()};
@@ -885,7 +894,7 @@ async function init() {
         // Read independent hosted inputs together. Keep image selection and
         // saved-run restoration below both reads, in their existing order.
         const [boot, initialHosted] = await Promise.all([
-            api(staticHosted ? '/bootstrap.json' : '/api/bootstrap'),
+            readBootstrap(),
             staticHosted ? readHostedHistory() : null
         ]);
         if (boot.hosted) {

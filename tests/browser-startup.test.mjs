@@ -18,14 +18,18 @@ const deferred = () => {
     return {promise, resolve, reject};
 };
 
-function fixture({marker = true, last = null, storageThrows = false} = {}) {
+function fixture({marker = true, last = null, storageThrows = false, inline = null} = {}) {
     const boot = deferred(), module = deferred(), history = deferred(), calls = [];
     const elements = new Map();
     const state = {};
     const hosted = {history: () => { calls.push('history'); return history.promise; }};
     const context = vm.createContext({
         S: state,
-        document: {querySelector: () => marker ? {} : null},
+        document: {querySelector: selector => {
+            if (selector === 'meta[name="waldofinder-hosted-bootstrap"]') return marker ? {} : null;
+            if (selector === '#waldofinder-bootstrap') return inline === null ? null : {textContent: inline};
+            throw Error('Unexpected selector: ' + selector);
+        }},
         localStorage: {getItem: () => {
             if (storageThrows) throw Error('Storage denied');
             return last;
@@ -125,4 +129,31 @@ test('bootstrap failure also handles a later storage failure', async () => {
     f.history.reject(Error('History unavailable')); await tick();
     assert.ok(f.calls.includes('error:Bootstrap unavailable'));
     assert.equal(f.state.image, undefined);
+});
+
+
+test('inline metadata avoids its network request but waits for saved history', async () => {
+    const f = fixture({inline: JSON.stringify(payload()), last: 'last'});
+    assert.deepEqual(f.calls, ['module']);
+    f.module.resolve(f.hosted); await tick();
+    assert.equal(f.state.image, undefined);
+    f.history.resolve([{id: 'last', status: 'done'}]); await f.run;
+    assert.deepEqual(f.calls.slice(-3), ['image:sample', 'restore:last', 'models']);
+    assert.ok(!f.calls.includes('/bootstrap.json'));
+});
+
+test('malformed inline metadata falls back to the public JSON endpoint', async () => {
+    const f = fixture({inline: '{broken'});
+    assert.deepEqual(f.calls, ['/bootstrap.json', 'module']);
+    f.module.resolve(f.hosted); f.history.resolve([]); f.boot.resolve(payload());
+    await f.run;
+    assert.deepEqual(f.calls.slice(-3), ['image:sample', 'preview', 'models']);
+});
+
+test('local mode ignores inline public data and keeps its session token', async () => {
+    const f = fixture({marker: false, inline: JSON.stringify(payload())});
+    assert.deepEqual(f.calls, ['/api/bootstrap']);
+    f.boot.resolve(payload(false)); await f.run;
+    assert.equal(f.state.token, 'local-token');
+    assert.ok(!f.calls.includes('module'));
 });

@@ -114,8 +114,11 @@ or external frontend dependencies.
 
 The hosted build generates `bootstrap.json` from the same public metadata as
 `GET /api/bootstrap`, after verifying the pinned reference assets. The built
-page reads this static file instead of waiting for the bootstrap API to inspect
-reference assets. Local `serve` keeps its dynamic session-token bootstrap;
+page embeds this public JSON as inert, HTML-escaped data and preloads the hosted
+history module, avoiding a metadata request on startup. Older pages and scripts
+can still read `bootstrap.json`; missing or malformed inline data also falls back
+to that file instead of the bootstrap API. Local `serve` keeps its dynamic
+session-token bootstrap;
 search, upload validation, model access and browser-local history are unchanged.
 The hosted page reads public bootstrap metadata and browser-local history in
 parallel, then applies the existing saved-run selection and image restoration.

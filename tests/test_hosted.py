@@ -246,7 +246,11 @@ def test_static_bootstrap_matches_public_runtime_metadata(server, tmp_path, monk
     assert payload["token"] == "" and payload["history"] == []
     assert "fixture-only" not in (public / "bootstrap.json").read_text()
     assert source_index.read_text() == original
-    assert 'name="waldofinder-hosted-bootstrap"' in (public / "index.html").read_text()
+    html = (public / "index.html").read_text()
+    assert 'name="waldofinder-hosted-bootstrap"' in html
+    assert '<link rel="modulepreload" href="/hosted.js">' in html
+    inline = html.split('id="waldofinder-bootstrap">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(inline) == expected
     with create_app(public_root=public).test_client() as gateway:
         response = gateway.get("/bootstrap.json")
         assert response.status_code == 200
@@ -267,3 +271,24 @@ def test_static_bootstrap_rejects_session_state(tmp_path, monkeypatch):
         with pytest.raises(ValueError, match="must not contain session state"):
             build_hosted.write_bootstrap()
         assert not (tmp_path / "bootstrap.json").exists()
+
+
+def test_inline_bootstrap_escapes_html_end_tags(tmp_path, monkeypatch):
+    from scripts import build_hosted
+
+    payload = {
+        "hosted": True,
+        "token": "",
+        "history": [],
+        "prompt": '</script><script>alert("fixture")</script> & <tag>',
+    }
+    monkeypatch.setattr(build_hosted, "PUBLIC", tmp_path)
+    monkeypatch.setattr(build_hosted, "bootstrap_payload", lambda: payload)
+    (tmp_path / "index.html").write_text("<head></head><body></body>")
+    build_hosted.write_bootstrap()
+    html = (tmp_path / "index.html").read_text()
+    inline = html.split('id="waldofinder-bootstrap">', 1)[1].split("</script>", 1)[0]
+    assert "<" not in inline
+    assert json.loads(inline) == payload
+    assert html.count("</script>") == 1
+    assert json.loads((tmp_path / "bootstrap.json").read_text()) == payload
