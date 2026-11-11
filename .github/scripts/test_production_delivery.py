@@ -439,17 +439,27 @@ class CompletedCIGateTests(unittest.TestCase):
         self.repo = {"id": 123, "full_name": "tsilva/example"}
         self.config = {"repository": "tsilva/example", "githubRepositoryId": 123}
         self.run = {
-            "id": 51, "workflow_id": 12, "run_number": 3, "run_attempt": 1,
-            "path": ".github/workflows/ci.yml", "event": "push",
-            "head_branch": "main", "head_sha": self.sha,
-            "status": "completed", "conclusion": "success",
-            "repository": self.repo.copy(), "head_repository": self.repo.copy(),
+            "id": 51,
+            "workflow_id": 12,
+            "run_number": 3,
+            "run_attempt": 1,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "head_branch": "main",
+            "head_sha": self.sha,
+            "status": "completed",
+            "conclusion": "success",
+            "repository": self.repo.copy(),
+            "head_repository": self.repo.copy(),
         }
         self.env = {
-            "GITHUB_REPOSITORY": "tsilva/example", "GITHUB_REF": "refs/heads/main",
-            "GITHUB_EVENT_NAME": "workflow_run", "GITHUB_SHA": self.sha,
+            "GITHUB_REPOSITORY": "tsilva/example",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_EVENT_NAME": "workflow_run",
+            "GITHUB_SHA": self.sha,
             "GITHUB_WORKFLOW_REF": "tsilva/example/.github/workflows/production-delivery.yml@refs/heads/main",
-            "GITHUB_EVENT_PATH": str(self.event_path), "GH_TOKEN": "fake-github",
+            "GITHUB_EVENT_PATH": str(self.event_path),
+            "GH_TOKEN": "fake-github",
         }
         self.write_event(self.run)
 
@@ -460,9 +470,14 @@ class CompletedCIGateTests(unittest.TestCase):
     def test_completed_main_ci_authorizes_its_exact_commit_without_sleeping(self):
         with (
             patch.dict(os.environ, self.env, clear=True),
-            patch.object(d, "request", side_effect=[
-                {"object": {"sha": self.sha}}, {"workflow_runs": [self.run]},
-            ]) as request,
+            patch.object(
+                d,
+                "request",
+                side_effect=[
+                    {"object": {"sha": self.sha}},
+                    {"workflow_runs": [self.run]},
+                ],
+            ) as request,
             patch.object(d.time, "sleep") as sleep,
         ):
             self.assertEqual(d.context(self.config), self.sha)
@@ -474,7 +489,9 @@ class CompletedCIGateTests(unittest.TestCase):
     def test_manual_dispatch_requires_already_successful_ci_without_event_file(self):
         self.event_path.unlink()
         with (
-            patch.dict(os.environ, self.env | {"GITHUB_EVENT_NAME": "workflow_dispatch"}, clear=True),
+            patch.dict(
+                os.environ, self.env | {"GITHUB_EVENT_NAME": "workflow_dispatch"}, clear=True
+            ),
             patch.object(d, "request", return_value={"workflow_runs": [self.run]}),
             patch.object(d.time, "sleep") as sleep,
         ):
@@ -494,12 +511,18 @@ class CompletedCIGateTests(unittest.TestCase):
 
     def test_untrusted_or_unsuccessful_trigger_is_rejected_before_network(self):
         bad = [
-            {"head_sha": "b" * 40}, {"head_branch": "feature"},
-            {"event": "pull_request"}, {"event": "workflow_dispatch"},
+            {"head_sha": "b" * 40},
+            {"head_branch": "feature"},
+            {"event": "pull_request"},
+            {"event": "workflow_dispatch"},
             {"path": ".github/workflows/impostor.yml"},
-            {"conclusion": "failure"}, {"conclusion": "cancelled"},
-            {"conclusion": "skipped"}, {"conclusion": "neutral"},
-            {"status": "in_progress"}, {"id": 0}, {"run_attempt": True},
+            {"conclusion": "failure"},
+            {"conclusion": "cancelled"},
+            {"conclusion": "skipped"},
+            {"conclusion": "neutral"},
+            {"status": "in_progress"},
+            {"id": 0},
+            {"run_attempt": True},
             {"head_repository": self.repo | {"id": 456}},
             {"repository": self.repo | {"id": 456}},
             {"head_repository": self.repo | {"full_name": "attacker/example"}},
@@ -507,7 +530,8 @@ class CompletedCIGateTests(unittest.TestCase):
         for change in bad:
             self.write_event(self.run | change)
             with (
-                self.subTest(change=change), patch.dict(os.environ, self.env, clear=True),
+                self.subTest(change=change),
+                patch.dict(os.environ, self.env, clear=True),
                 patch.object(d, "request") as request,
             ):
                 with self.assertRaises(d.DeliveryError):
@@ -518,7 +542,8 @@ class CompletedCIGateTests(unittest.TestCase):
         for changes in ({"action": "requested"}, {"repository": self.repo | {"id": 456}}):
             self.write_event(self.run, **changes)
             with (
-                self.subTest(changes=changes), patch.dict(os.environ, self.env, clear=True),
+                self.subTest(changes=changes),
+                patch.dict(os.environ, self.env, clear=True),
                 patch.object(d, "request") as request,
             ):
                 with self.assertRaises(d.DeliveryError):
@@ -532,14 +557,21 @@ class CompletedCIGateTests(unittest.TestCase):
 
     def test_authoritative_ci_metadata_must_still_match_the_completed_event(self):
         for change in (
-            {"id": 52}, {"workflow_id": 13}, {"run_attempt": 2}, {"run_number": 4},
-            {"status": "in_progress"}, {"conclusion": "failure"},
+            {"id": 52},
+            {"workflow_id": 13},
+            {"run_attempt": 2},
+            {"run_number": 4},
+            {"status": "in_progress"},
+            {"conclusion": "failure"},
             {"head_repository": self.repo | {"id": 456}},
             {"path": ".github/workflows/impostor.yml"},
         ):
             with (
-                self.subTest(change=change), patch.dict(os.environ, self.env, clear=True),
-                patch.object(d, "request", return_value={"workflow_runs": [self.run | change]}) as request,
+                self.subTest(change=change),
+                patch.dict(os.environ, self.env, clear=True),
+                patch.object(
+                    d, "request", return_value={"workflow_runs": [self.run | change]}
+                ) as request,
                 patch.object(d.time, "sleep") as sleep,
             ):
                 with self.assertRaises(d.DeliveryError):
@@ -548,11 +580,22 @@ class CompletedCIGateTests(unittest.TestCase):
                 sleep.assert_not_called()
 
     def test_latest_pending_or_failed_run_blocks_an_older_success(self):
-        for status, conclusion in (("queued", None), ("in_progress", None), ("completed", "failure")):
-            latest = self.run | {"id": 52, "run_number": 4, "status": status, "conclusion": conclusion}
+        for status, conclusion in (
+            ("queued", None),
+            ("in_progress", None),
+            ("completed", "failure"),
+        ):
+            latest = self.run | {
+                "id": 52,
+                "run_number": 4,
+                "status": status,
+                "conclusion": conclusion,
+            }
             with (
                 self.subTest(status=status),
-                patch.dict(os.environ, self.env | {"GITHUB_EVENT_NAME": "workflow_dispatch"}, clear=True),
+                patch.dict(
+                    os.environ, self.env | {"GITHUB_EVENT_NAME": "workflow_dispatch"}, clear=True
+                ),
                 patch.object(d, "request", return_value={"workflow_runs": [self.run, latest]}),
                 patch.object(d.time, "sleep") as sleep,
             ):
@@ -565,9 +608,14 @@ class CompletedCIGateTests(unittest.TestCase):
             patch.dict(os.environ, self.env, clear=True),
             patch.object(d, "configuration", return_value=self.config),
             patch.object(d.sys, "argv", ["production_delivery.py", "sync"]),
-            patch.object(d, "request", side_effect=[
-                {"object": {"sha": self.sha}}, {"workflow_runs": []},
-            ]),
+            patch.object(
+                d,
+                "request",
+                side_effect=[
+                    {"object": {"sha": self.sha}},
+                    {"workflow_runs": []},
+                ],
+            ),
             patch.object(d, "infisical_secrets") as secrets,
             patch.object(d, "vercel_request") as vercel,
             patch.object(d.time, "sleep") as sleep,
@@ -585,7 +633,6 @@ class CompletedCIGateTests(unittest.TestCase):
         ):
             with self.assertRaises(d.DeliveryError):
                 d.context(self.config)
-
 
 
 if __name__ == "__main__":

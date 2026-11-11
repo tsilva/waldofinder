@@ -83,8 +83,7 @@ def context(config):
         or required("GITHUB_REF") != "refs/heads/main"
         or required("GITHUB_EVENT_NAME") not in ("workflow_run", "workflow_dispatch")
         or required("GITHUB_WORKFLOW_REF")
-        != config["repository"]
-        + "/.github/workflows/production-delivery.yml@refs/heads/main"
+        != config["repository"] + "/.github/workflows/production-delivery.yml@refs/heads/main"
     ):
         raise DeliveryError(
             "Workflow repository, branch, event or workflow path mismatch; no writes."
@@ -397,6 +396,7 @@ def validate_ci_run(run, config, sha):
             "CI must be a successful main-push run of the approved ci.yml for this exact commit; no writes."
         ) from None
 
+
 def triggering_ci_run(config, sha):
     # workflow_run's GITHUB_SHA is the default-branch tip, not necessarily the
     # triggering CI commit. Reject stale events instead of deploying that tip.
@@ -418,6 +418,7 @@ def triggering_ci_run(config, sha):
     except (OSError, KeyError, TypeError, ValueError):
         raise DeliveryError("Invalid completed CI event; no credentials requested.") from None
 
+
 def verify_ci(config, sha):
     """Recheck CI once; pending, failed or superseded CI never holds a runner."""
     trigger = triggering_ci_run(config, sha)
@@ -433,9 +434,7 @@ def verify_ci(config, sha):
     try:
         runs = request("GET", url, required("GH_TOKEN"))["workflow_runs"]
         candidates = [run for run in runs if run.get("head_sha") == sha]
-        if not candidates or any(
-            type(run.get("run_number")) is not int for run in candidates
-        ):
+        if not candidates or any(type(run.get("run_number")) is not int for run in candidates):
             raise ValueError()
         latest = max(candidates, key=lambda run: run["run_number"])
         validate_ci_run(latest, config, sha)
