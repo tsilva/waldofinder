@@ -117,6 +117,8 @@ The hosted build generates `bootstrap.json` from the same public metadata as
 page reads this static file instead of waiting for the bootstrap API to inspect
 reference assets. Local `serve` keeps its dynamic session-token bootstrap;
 search, upload validation, model access and browser-local history are unchanged.
+The hosted page reads public bootstrap metadata and browser-local history in
+parallel, then applies the existing saved-run selection and image restoration.
 Public build files use a 24-hour Vercel CDN cache while browsers revalidate on
 reuse. New deployments get a fresh cache namespace. API responses retain their
 existing `no-store` policy; missing files and method errors are not cached by
@@ -426,6 +428,7 @@ records individual runs, and explains the remaining close-lookalike errors.
 uv --config-file uv.toml sync --locked
 uv --config-file uv.toml audit --frozen
 uv --config-file uv.toml run pytest
+node --test tests/browser-startup.test.mjs
 uv --config-file uv.toml run ruff check .
 uv --config-file uv.toml run ruff format --check .
 ```
@@ -435,6 +438,9 @@ Dependencies are locked in `uv.lock`; uv excludes packages released within the
 last seven days. Commands select `uv.toml` explicitly to avoid machine-wide configuration
 overrides; keep its age policy aligned with `pyproject.toml`. Offline tests cover geometry, branch selection, request caps,
 provider parsing and payloads, credential redaction, and result artifacts.
+The browser-startup tests use Node's built-in test runner to check asynchronous
+read ordering, saved-run selection and storage/network failure handling without
+provider requests.
 
 API references: [OpenRouter image inputs](https://openrouter.ai/docs/guides/overview/multimodal/image-understanding),
 [structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs),
