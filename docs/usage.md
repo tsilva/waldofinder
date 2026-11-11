@@ -553,3 +553,9 @@ the 19-scene run's `evaluated-results.json` contains the checked final outcomes.
 The source manifest is snapshotted so later catalog-label corrections do not
 erase acquisition provenance. The department-store and musketeer scenes had
 incorrect initial descriptive labels; image bytes and target coordinates did not change.
+
+The production Lighthouse workflow keeps three desktop samples and logs compact
+per-sample timings, main-thread work and source groups. Use these records to
+investigate first-load variance; the normal representative score remains the
+verification result. Resource paths and query strings are omitted from timing
+attribution. The audit preset, analytics blocking and site security remain unchanged.
