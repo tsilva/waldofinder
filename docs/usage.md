@@ -114,8 +114,8 @@ or external frontend dependencies.
 
 The hosted build generates `bootstrap.json` from the same public metadata as
 `GET /api/bootstrap`, after verifying the pinned reference assets. The built
-page loads it from the CDN so the initial scene does not wait for a Python
-Function cold start. Local `serve` keeps its dynamic session-token bootstrap;
+page reads this static file instead of waiting for the bootstrap API to inspect
+reference assets. Local `serve` keeps its dynamic session-token bootstrap;
 search, upload validation, model access and browser-local history are unchanged.
 
 The hosted app keeps the same grid, BSP and direct-box engine and prompts.
