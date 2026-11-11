@@ -117,6 +117,10 @@ The hosted build generates `bootstrap.json` from the same public metadata as
 page reads this static file instead of waiting for the bootstrap API to inspect
 reference assets. Local `serve` keeps its dynamic session-token bootstrap;
 search, upload validation, model access and browser-local history are unchanged.
+Public build files use a 24-hour Vercel CDN cache while browsers revalidate on
+reuse. New deployments get a fresh cache namespace. API responses retain their
+existing `no-store` policy; missing files and method errors are not cached by
+this policy. See [Vercel CDN caching](https://vercel.com/docs/caching/cdn-cache).
 
 The hosted app keeps the same grid, BSP and direct-box engine and prompts.
 The Flask `app.py` entrypoint streams `HostedHandler` responses: a search runs inside one active streaming

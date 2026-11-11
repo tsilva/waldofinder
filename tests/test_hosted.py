@@ -164,6 +164,7 @@ def test_flask_gateway_streams_and_serves_static(tmp_path):
         def do_GET(self):
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(b'{"first":true}\n')
             self.wfile.flush()
@@ -179,11 +180,23 @@ def test_flask_gateway_streams_and_serves_static(tmp_path):
 
     app = create_app(Handler, tmp_path)
     with app.test_client() as client:
-        assert b"Waldo" in client.get("/").data
+        index = client.get("/")
+        assert b"Waldo" in index.data
+        assert index.headers["Cache-Control"] == "public, max-age=0, must-revalidate"
+        assert index.headers["Vercel-CDN-Cache-Control"] == "max-age=86400"
+        assert "Set-Cookie" not in index.headers
         response = client.get("/api/stream", buffered=False)
         assert list(response.response) == [b'{"first":true}\n', b'{"last":true}\n']
-        assert client.post("/api/echo", json={"ok": True}).json == {"ok": True}
-        assert client.get("/../pyproject.toml").status_code == 404
+        assert response.headers["Cache-Control"] == "no-store"
+        assert "Vercel-CDN-Cache-Control" not in response.headers
+        echoed = client.post("/api/echo", json={"ok": True})
+        assert echoed.json == {"ok": True}
+        assert "Vercel-CDN-Cache-Control" not in echoed.headers
+        for path in ["/../pyproject.toml", "/missing.js"]:
+            missing = client.get(path)
+            assert missing.status_code == 404
+            assert "Vercel-CDN-Cache-Control" not in missing.headers
+        assert client.post("/").status_code == 405
 
 
 def test_entrypoint_loads_without_editable_project_install(tmp_path):
