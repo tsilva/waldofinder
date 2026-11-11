@@ -14,10 +14,18 @@
 - GitHub `Production` allows deployments from `main`. Its `VERCEL_TOKEN` must
   be scoped to this Vercel project; never copy a general CLI login into Actions.
 
+Automatic delivery accepts only successful main-push CI from this repository,
+for the same SHA as the delivery run and the current head of `main`. The CI
+workflow path, immutable repository IDs, run ID and rerun attempt are checked
+again against GitHub before secret access. Failed, cancelled, forked, stale or
+superseded runs cannot deploy. Manual and secret-change relay dispatches remain
+available, but fail immediately if the latest exact-commit CI is not already
+successful. CI artifacts and caches are not imported into the trusted sync job.
+
 CI runs Python 3.11/3.14 tests and Ruff. Committed-secret scanning gates delivery.
 The maintained installer generated the delivery runtime, tests, metadata and source
 hashes. The workflow adds the same secret-scanning prerequisite used by the other
-projects. Delivery waits for exact-commit CI, reads only the pinned Production key,
+projects. Delivery starts after exact-commit CI succeeds, reads only the pinned Production key,
 synchronizes it to Vercel as a Secret. GitHub Actions then builds that commit, stages the prebuilt deployment and verifies it before promotion. Keep Require
 Separate Values enabled. The ordered replacement has been verified and direct
 Vercel Git deployments are disabled. The `waldofinder-github-production-delivery`
@@ -80,8 +88,9 @@ is replaced only in Production because Vercel cannot convert it to Config in
 place. Preview and Development variables are preserved. Provider response
 bodies and secret values are suppressed from logs.
 
-The copied workflow expects an existing `ci.yml` workflow and waits for its
-successful push run for the exact main commit. Before enabling delivery,
+The copied workflow expects an existing `ci.yml` workflow named `CI`. Its
+completed main-push event starts delivery only after success for the exact
+current main commit; no runner waits for CI. Before enabling delivery,
 configure the repository's GitHub Production environment and project-scoped
 `VERCEL_TOKEN`, authorize its exact repository/main/workflow claims in the
 Infisical OIDC reader, and assign only the required source access. Keep the
