@@ -44,6 +44,37 @@ def settings(folder):
     )
 
 
+def bootstrap_payload():
+    """Return the hosted site's public, deployment-specific bootstrap metadata."""
+    args = settings("/tmp")
+    ref = load_reference(args.reference)
+    refs = load_distractors(args)
+    return {
+        "hosted": True,
+        "token": "",
+        "prompt": PROMPT,
+        "prompt_version": PROMPT_VERSION,
+        "localization_prompt": LOCALIZATION_PROMPT,
+        "localization_prompt_version": LOCALIZATION_VERSION,
+        "image_detail": IMAGE_DETAIL,
+        "reference_detail": "auto",
+        "history": [],
+        "auth": "Infisical Production",
+        "replay_available": False,
+        "reference": ref.manifest | {"url": "/waldo-reference.jpg"},
+        "distractors": {
+            k: v | {"url": f"/{k}-reference.png"} for k, v in distractor_manifest(refs).items()
+        },
+        "sample": {
+            "id": "sample",
+            "name": "Beach scene",
+            "width": 3000,
+            "height": 1926,
+            "url": "/sample.jpg",
+        },
+    }
+
+
 def decode_image(value):
     if not isinstance(value, str) or "," not in value or len(value) > MAX_BODY:
         raise DashboardError("Choose an image up to 3 MB.", 413)
@@ -140,36 +171,7 @@ class HostedHandler(BaseHTTPRequestHandler):
                     }
                 )
             if path == "/api/bootstrap":
-                args = settings("/tmp")
-                ref = load_reference(args.reference)
-                refs = load_distractors(args)
-                return self.send(
-                    {
-                        "hosted": True,
-                        "token": "",
-                        "prompt": PROMPT,
-                        "prompt_version": PROMPT_VERSION,
-                        "localization_prompt": LOCALIZATION_PROMPT,
-                        "localization_prompt_version": LOCALIZATION_VERSION,
-                        "image_detail": IMAGE_DETAIL,
-                        "reference_detail": "auto",
-                        "history": [],
-                        "auth": "Infisical Production",
-                        "replay_available": False,
-                        "reference": ref.manifest | {"url": "/waldo-reference.jpg"},
-                        "distractors": {
-                            k: v | {"url": f"/{k}-reference.png"}
-                            for k, v in distractor_manifest(refs).items()
-                        },
-                        "sample": {
-                            "id": "sample",
-                            "name": "Beach scene",
-                            "width": 3000,
-                            "height": 1926,
-                            "url": "/sample.jpg",
-                        },
-                    }
-                )
+                return self.send(bootstrap_payload())
             if path == "/api/models":
                 with tempfile.TemporaryDirectory() as directory:
                     return self.send({"models": Dashboard(settings(directory)).models()})

@@ -11,6 +11,7 @@ import pymupdf
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from waldofinder.hosted import bootstrap_payload  # noqa: E402
 from waldofinder.reference import PUBLISHER_SHA256, PUBLISHER_SOURCE  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,28 @@ def download(url, expected):
     if hashlib.sha256(response.content).hexdigest() != expected:
         raise ValueError("Public source changed; review asset provenance before deployment.")
     return response.content
+
+
+def write_bootstrap():
+    """Build the same public metadata without a runtime Function cold start."""
+    payload = bootstrap_payload()
+    if payload["token"] or payload["history"] or not payload["hosted"]:
+        raise ValueError("Static hosted bootstrap must not contain session state.")
+    serialized = json.dumps(payload, allow_nan=False, separators=(",", ":"))
+    (PUBLIC / "bootstrap.json").write_text(serialized + "\n")
+    index = PUBLIC / "index.html"
+    html = index.read_text()
+    marker = '<meta name="waldofinder-hosted-bootstrap" content="static">'
+    if "</head>" not in html:
+        raise ValueError("Hosted index is missing its head boundary.")
+    # JSON is inert data, but HTML parsing still recognizes script end tags.
+    inline = serialized.replace("<", "\\u003c")
+    additions = (
+        f"  {marker}\n"
+        '  <link rel="modulepreload" href="/hosted.js">\n'
+        f'  <script type="application/json" id="waldofinder-bootstrap">{inline}</script>\n'
+    )
+    index.write_text(html.replace("</head>", additions + "</head>", 1))
 
 
 def build():
@@ -58,6 +81,7 @@ def build():
         p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in ASSETS.iterdir() if p.is_file()
     }
     (ASSETS / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    write_bootstrap()
     print("Hosted assets built; public source hashes verified.")
 
 

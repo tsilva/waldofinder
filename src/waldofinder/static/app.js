@@ -877,10 +877,34 @@ async function init() {
     renderConfig();
     renderAll();
     try {
-        const boot = await api('/api/bootstrap');
+        const staticHosted = !!document.querySelector('meta[name="waldofinder-hosted-bootstrap"]');
+        const readBootstrap = async () => {
+            if (staticHosted) {
+                const inline = document.querySelector('#waldofinder-bootstrap');
+                if (inline) {
+                    try {
+                        const boot = JSON.parse(inline.textContent);
+                        if (boot?.hosted === true && boot.token === '' &&
+                            Array.isArray(boot.history) && boot.history.length === 0) return boot;
+                    } catch {}
+                }
+            }
+            return api(staticHosted ? '/bootstrap.json' : '/api/bootstrap');
+        };
+        const readHostedHistory = async () => {
+            const hosted = await import('./hosted.js');
+            return {hosted, history: await hosted.history()};
+        };
+        // Read independent hosted inputs together. Keep image selection and
+        // saved-run restoration below both reads, in their existing order.
+        const [boot, initialHosted] = await Promise.all([
+            readBootstrap(),
+            staticHosted ? readHostedHistory() : null
+        ]);
         if (boot.hosted) {
-            S.hosted = await import('./hosted.js');
-            boot.history = await S.hosted.history();
+            const {hosted, history} = initialHosted ?? await readHostedHistory();
+            S.hosted = hosted;
+            boot.history = history;
             document.title = 'waldofinder — Vision model search lab';
             $('max-requests').max = 32;
             $('max-tokens').max = 8192;

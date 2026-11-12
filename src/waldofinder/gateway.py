@@ -81,12 +81,21 @@ def create_app(handler_type=HostedHandler, public_root=None):
             direct_passthrough=True,
         )
 
+    def public_file(path):
+        response = send_from_directory(public_root, path)
+        if response.status_code == 200:
+            # This directory contains only deployment-built, user-independent files.
+            # Browsers revalidate; Vercel caches per deployment and clears on release.
+            response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
+            response.headers["Vercel-CDN-Cache-Control"] = "max-age=86400"
+        return response
+
     @app.get("/")
     def index():
-        return send_from_directory(public_root, "index.html")
+        return public_file("index.html")
 
     @app.get("/<path:path>")
     def static_file(path):
-        return send_from_directory(public_root, path)
+        return public_file(path)
 
     return app

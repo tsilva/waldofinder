@@ -164,6 +164,7 @@ def test_flask_gateway_streams_and_serves_static(tmp_path):
         def do_GET(self):
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(b'{"first":true}\n')
             self.wfile.flush()
@@ -179,11 +180,23 @@ def test_flask_gateway_streams_and_serves_static(tmp_path):
 
     app = create_app(Handler, tmp_path)
     with app.test_client() as client:
-        assert b"Waldo" in client.get("/").data
+        index = client.get("/")
+        assert b"Waldo" in index.data
+        assert index.headers["Cache-Control"] == "public, max-age=0, must-revalidate"
+        assert index.headers["Vercel-CDN-Cache-Control"] == "max-age=86400"
+        assert "Set-Cookie" not in index.headers
         response = client.get("/api/stream", buffered=False)
         assert list(response.response) == [b'{"first":true}\n', b'{"last":true}\n']
-        assert client.post("/api/echo", json={"ok": True}).json == {"ok": True}
-        assert client.get("/../pyproject.toml").status_code == 404
+        assert response.headers["Cache-Control"] == "no-store"
+        assert "Vercel-CDN-Cache-Control" not in response.headers
+        echoed = client.post("/api/echo", json={"ok": True})
+        assert echoed.json == {"ok": True}
+        assert "Vercel-CDN-Cache-Control" not in echoed.headers
+        for path in ["/../pyproject.toml", "/missing.js"]:
+            missing = client.get(path)
+            assert missing.status_code == 404
+            assert "Vercel-CDN-Cache-Control" not in missing.headers
+        assert client.post("/").status_code == 405
 
 
 def test_entrypoint_loads_without_editable_project_install(tmp_path):
@@ -211,3 +224,71 @@ with module.app.test_client() as client:
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_static_bootstrap_matches_public_runtime_metadata(server, tmp_path, monkeypatch):
+    from scripts import build_hosted
+    from waldofinder.gateway import create_app
+
+    client, _ = server
+    public = tmp_path / "public"
+    public.mkdir()
+    source_index = build_hosted.ROOT / "src/waldofinder/static/index.html"
+    original = source_index.read_text()
+    (public / "index.html").write_text(original)
+    monkeypatch.setattr(build_hosted, "PUBLIC", public)
+    expected = client.get("/api/bootstrap").json()
+
+    build_hosted.write_bootstrap()
+
+    payload = json.loads((public / "bootstrap.json").read_text())
+    assert payload == expected
+    assert payload["token"] == "" and payload["history"] == []
+    assert "fixture-only" not in (public / "bootstrap.json").read_text()
+    assert source_index.read_text() == original
+    html = (public / "index.html").read_text()
+    assert 'name="waldofinder-hosted-bootstrap"' in html
+    assert '<link rel="modulepreload" href="/hosted.js">' in html
+    inline = html.split('id="waldofinder-bootstrap">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(inline) == expected
+    with create_app(public_root=public).test_client() as gateway:
+        response = gateway.get("/bootstrap.json")
+        assert response.status_code == 200
+        assert response.mimetype == "application/json"
+        assert response.json == expected
+
+
+def test_static_bootstrap_rejects_session_state(tmp_path, monkeypatch):
+    from scripts import build_hosted
+
+    monkeypatch.setattr(build_hosted, "PUBLIC", tmp_path)
+    for payload in [
+        {"hosted": True, "token": "session-only", "history": []},
+        {"hosted": True, "token": "", "history": [{"id": "private-run"}]},
+        {"hosted": False, "token": "", "history": []},
+    ]:
+        monkeypatch.setattr(build_hosted, "bootstrap_payload", lambda: payload)
+        with pytest.raises(ValueError, match="must not contain session state"):
+            build_hosted.write_bootstrap()
+        assert not (tmp_path / "bootstrap.json").exists()
+
+
+def test_inline_bootstrap_escapes_html_end_tags(tmp_path, monkeypatch):
+    from scripts import build_hosted
+
+    payload = {
+        "hosted": True,
+        "token": "",
+        "history": [],
+        "prompt": '</script><script>alert("fixture")</script> & <tag>',
+    }
+    monkeypatch.setattr(build_hosted, "PUBLIC", tmp_path)
+    monkeypatch.setattr(build_hosted, "bootstrap_payload", lambda: payload)
+    (tmp_path / "index.html").write_text("<head></head><body></body>")
+    build_hosted.write_bootstrap()
+    html = (tmp_path / "index.html").read_text()
+    inline = html.split('id="waldofinder-bootstrap">', 1)[1].split("</script>", 1)[0]
+    assert "<" not in inline
+    assert json.loads(inline) == payload
+    assert html.count("</script>") == 1
+    assert json.loads((tmp_path / "bootstrap.json").read_text()) == payload

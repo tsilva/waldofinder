@@ -17,3 +17,5 @@ dist/
 public/
 hosted-assets/
 /.access.local.toml
+
+/.internal/
