@@ -41,7 +41,8 @@ const modeName = config => config.strategy === 'bbox' ? 'Direct bounding box' : 
 const directMode = () => (S.run?.config.strategy || $('strategy').value) === 'bbox';
 let previewVersion = 0,
     renderPending = false,
-    configBefore = null;
+    configBefore = null,
+    cropSourceState = null;
 const fields = {
     'tiles': 'tiles',
     'max-depth': 'max_depth',
@@ -221,12 +222,31 @@ function fitImage() {
 }
 
 function setImage(image) {
+    if (S.image?.url !== image.url || S.image?.width !== image.width ||
+        S.image?.height !== image.height) cropSourceState = null;
     S.image = image;
-    if ($('scene-image').getAttribute('src') !== image.url) $('scene-image').src = image.url;
+    const scene = $('scene-image');
+    if (image.display) {
+        scene.sizes = image.display.sizes;
+        scene.srcset = image.display.srcset;
+    } else {
+        scene.removeAttribute('srcset');
+        scene.removeAttribute('sizes');
+    }
+    const url = image.display?.url || image.url;
+    if (scene.getAttribute('src') !== url) scene.src = url;
     $('image-frame').hidden = false;
     $('scene-empty').hidden = true;
     $('overlay').setAttribute('viewBox', `0 0 ${image.width} ${image.height}`);
     fitImage();
+}
+function restoreOriginalDisplay() {
+    const scene = $('scene-image');
+    if (S.image?.display && scene.getAttribute('src') !== S.image.url) {
+        scene.removeAttribute('srcset');
+        scene.removeAttribute('sizes');
+        scene.src = S.image.url;
+    }
 }
 async function preview() {
     const version = ++previewVersion;
@@ -380,12 +400,43 @@ function renderControls() {
     $('stats').title = $('stats').textContent;
 }
 
+function originalCropSource() {
+    const image = S.image;
+    if (!image) return null;
+    if (!image.display) {
+        const scene = $('scene-image');
+        return scene.complete && scene.naturalWidth ? scene : null;
+    }
+    if (cropSourceState?.url !== image.url) {
+        const source = new Image();
+        const state = {url: image.url, source, ready: false};
+        cropSourceState = state;
+        source.src = image.url;
+        source.decode().then(() => {
+            if (cropSourceState !== state) return;
+            if (source.naturalWidth !== image.width || source.naturalHeight !== image.height) {
+                throw Error('Source image dimensions changed. Reload the image before reviewing crops.');
+            }
+            state.ready = true;
+            renderReview();
+        }).catch(error => {
+            if (cropSourceState !== state) return;
+            state.error = true;
+            state.errorMessage = error.message || 'Could not load original crop image.';
+            notice(state.errorMessage, true);
+            renderReview();
+        });
+    }
+    return cropSourceState.ready ? cropSourceState.source : null;
+}
+
 function previewCrop(record) {
-    if (!$('scene-image').complete || !$('scene-image').naturalWidth) return '';
+    const source = originalCropSource();
+    if (!source) return '';
     const [x, y, x1, y1] = record.crop_box || record.region.box, canvas = document.createElement('canvas');
     canvas.width = x1 - x;
     canvas.height = y1 - y;
-    canvas.getContext('2d').drawImage($('scene-image'), x, y, x1 - x, y1 - y, 0, 0, x1 - x, y1 - y);
+    canvas.getContext('2d').drawImage(source, x, y, x1 - x, y1 - y, 0, 0, x1 - x, y1 - y);
     return canvas.toDataURL('image/png');
 }
 
@@ -406,9 +457,12 @@ function renderReview() {
         $('crop-meta').textContent = '';
     } else {
         const src = r.crop_data_url || (r.crop && S.run ? `/api/runs/${encodeURIComponent(S.run.id)}/files/${m.summary?.artifact_dir || `model-${String(S.modelIndex).padStart(2,'0')}`}/${r.crop}` : previewCrop(r));
-        if ($('crop-image').getAttribute('src') !== src) $('crop-image').src = src;
+        if (src && $('crop-image').getAttribute('src') !== src) $('crop-image').src = src;
+        if (!src) $('crop-image').removeAttribute('src');
         $('crop-image').hidden = !src;
         $('crop-decision').textContent = `${r.phase==='done' && r.status!=='error'?'Model: ':''}${statusText(r)}`;
+        if (!src && S.image?.display) $('crop-decision').textContent = cropSourceState?.error
+            ? 'Original crop unavailable. Reopen this region to retry.' : 'Loading original crop…';
         const box = r.crop_box || r.region.box;
         const detail = r.request_settings?.image_detail || (S.run ? S.run.image_detail || 'auto' : 'original');
         $('crop-meta').textContent = `${box[2]-box[0]} × ${box[3]-box[1]} px · ${detail} detail${r.latency_seconds!=null?` · ${r.latency_seconds.toFixed(2)}s`:''} · [${box.join(', ')}]`;
@@ -761,6 +815,11 @@ $('image-file').addEventListener('change', async () => {
 });
 
 function inspect(id, index) {
+    // Only a new explicit review action retries a failed original-image load.
+    if (cropSourceState?.error) {
+        if ($('message').textContent === cropSourceState.errorMessage) notice();
+        cropSourceState = null;
+    }
     S.modelIndex = index;
     const m = models()[index],
         r = recordFor(m, {
@@ -872,6 +931,7 @@ new ResizeObserver(() => {
     scheduleRender();
 }).observe($('scene-viewport'));
 $('scene-image').addEventListener('load', scheduleRender);
+$('scene-image').addEventListener('error', restoreOriginalDisplay);
 async function init() {
     renderChoices();
     renderConfig();

@@ -128,6 +128,17 @@ reuse. New deployments get a fresh cache namespace. API responses retain their
 existing `no-store` policy; missing files and method errors are not cached by
 this policy. See [Vercel CDN caching](https://vercel.com/docs/caching/cdn-cache).
 
+The hosted sample uses responsive WebP display derivatives, with the original
+JPEG available for large or high-density screens. The preload and scene use
+the same candidate list. These presentation assets do not change the sample's
+original URL, dimensions, search payload or crop coordinates. Crop review decodes
+the original on first use; its status reports loading or failure, and reopening
+the region explicitly retries a failed load. A missing display asset falls back
+to the original. Uploads and restored runs continue to display their own source
+images without applying the sample's derivatives. The first original-crop access
+may need a source download; the original artwork is never replaced by a display
+derivative in a model request or saved run.
+
 The hosted app keeps the same grid, BSP and direct-box engine and prompts.
 The Flask `app.py` entrypoint streams `HostedHandler` responses: a search runs inside one active streaming
 POST request, not a detached serverless task. A bounded response queue applies backpressure. A cancellation timer stops new work

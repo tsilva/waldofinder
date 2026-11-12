@@ -292,3 +292,56 @@ def test_inline_bootstrap_escapes_html_end_tags(tmp_path, monkeypatch):
     assert json.loads(inline) == payload
     assert html.count("</script>") == 1
     assert json.loads((tmp_path / "bootstrap.json").read_text()) == payload
+
+
+def test_display_derivatives_preserve_original_bytes_and_coordinate_space(tmp_path, monkeypatch):
+    from scripts import build_hosted
+
+    monkeypatch.setattr(build_hosted, "PUBLIC", tmp_path)
+    source = tmp_path / "sample.jpg"
+    Image.new("RGB", (3000, 1926), "orange").save(source)
+    original = source.read_bytes()
+    display = build_hosted.write_display_images()
+    assert source.read_bytes() == original
+    candidates = [item.split() for item in display["srcset"].split(", ")]
+    assert candidates[-1] == ["/sample.jpg", "3000w"]
+    for url, width in candidates[:-1]:
+        image = Image.open(tmp_path / url.lstrip("/"))
+        assert image.width == int(width[:-1])
+        assert abs(image.height - image.width * 1926 / 3000) <= 1
+        assert image.format == "WEBP"
+    assert display["sizes"] == "100vw"
+
+
+def test_display_bootstrap_and_preload_refer_to_same_assets_without_changing_source(
+    tmp_path, monkeypatch
+):
+    from scripts import build_hosted
+
+    monkeypatch.setattr(build_hosted, "PUBLIC", tmp_path)
+    payload = {
+        "hosted": True,
+        "token": "",
+        "history": [],
+        "sample": {
+            "url": "/sample.jpg",
+            "width": 3000,
+            "height": 1926,
+        },
+    }
+    monkeypatch.setattr(build_hosted, "bootstrap_payload", lambda: payload)
+    (tmp_path / "index.html").write_text("<head></head><body></body>")
+    display = {
+        "url": "/display.webp",
+        "srcset": "/display.webp 1440w, /sample.jpg 3000w",
+        "sizes": "100vw",
+    }
+    build_hosted.write_bootstrap(display)
+    result = json.loads((tmp_path / "bootstrap.json").read_text())
+    assert result["sample"] == payload["sample"]
+    assert result["sample"]["url"] == "/sample.jpg"
+    html = (tmp_path / "index.html").read_text()
+    assert 'href="/display.webp"' in html
+    assert f'imagesrcset="{display["srcset"]}"' in html
+    assert 'imagesizes="100vw"' in html
+    assert 'fetchpriority="high"' in html

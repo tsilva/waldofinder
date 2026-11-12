@@ -4,6 +4,8 @@ import hashlib
 import json
 import shutil
 import sys
+from html import escape
+from io import BytesIO
 from pathlib import Path
 
 import httpx
@@ -31,11 +33,36 @@ def download(url, expected):
     return response.content
 
 
-def write_bootstrap():
+def write_display_images():
+    """Presentation derivatives never replace the pinned search/crop source."""
+    source = Image.open(PUBLIC / "sample.jpg").convert("RGB")
+    variants = []
+    for width in (640, 960, 1440, 1920):
+        image = source.copy()
+        image.thumbnail((width, source.height), Image.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="WEBP", quality=90, method=6)
+        raw = output.getvalue()
+        name = f"sample-display-{width}-{hashlib.sha256(raw).hexdigest()[:12]}.webp"
+        (PUBLIC / name).write_bytes(raw)
+        variants.append((f"/{name}", image.width))
+    return {
+        "url": variants[2][0],
+        "srcset": ", ".join(f"{url} {width}w" for url, width in variants)
+        + f", /sample.jpg {source.width}w",
+        # The scene always fits within the viewport. A conservative size retains
+        # enough detail at high DPR without a second request after stage fitting.
+        "sizes": "100vw",
+    }
+
+
+def write_bootstrap(display=None):
     """Build the same public metadata without a runtime Function cold start."""
     payload = bootstrap_payload()
     if payload["token"] or payload["history"] or not payload["hosted"]:
         raise ValueError("Static hosted bootstrap must not contain session state.")
+    if display is not None:
+        payload["sample"]["display"] = display
     serialized = json.dumps(payload, allow_nan=False, separators=(",", ":"))
     (PUBLIC / "bootstrap.json").write_text(serialized + "\n")
     index = PUBLIC / "index.html"
@@ -50,6 +77,13 @@ def write_bootstrap():
         '  <link rel="modulepreload" href="/hosted.js">\n'
         f'  <script type="application/json" id="waldofinder-bootstrap">{inline}</script>\n'
     )
+    if display is not None:
+        additions += (
+            '  <link rel="preload" as="image" fetchpriority="high" '
+            f'href="{escape(display["url"], quote=True)}" '
+            f'imagesrcset="{escape(display["srcset"], quote=True)}" '
+            f'imagesizes="{escape(display["sizes"], quote=True)}">\n'
+        )
     index.write_text(html.replace("</head>", additions + "</head>", 1))
 
 
@@ -81,7 +115,7 @@ def build():
         p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in ASSETS.iterdir() if p.is_file()
     }
     (ASSETS / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    write_bootstrap()
+    write_bootstrap(write_display_images())
     print("Hosted assets built; public source hashes verified.")
 
 
