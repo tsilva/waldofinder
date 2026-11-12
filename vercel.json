@@ -10,15 +10,6 @@
   },
   "headers": [
     {
-      "source": "/",
-      "headers": [
-        {
-          "key": "Link",
-          "value": "</sample.jpg>; rel=preload; as=image"
-        }
-      ]
-    },
-    {
       "source": "/(.*)",
       "headers": [
         {
