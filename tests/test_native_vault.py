@@ -1,4 +1,5 @@
 """Native-session guards with synthetic capabilities and no account traffic."""
+
 import hashlib
 import ssl
 from argparse import Namespace
@@ -19,9 +20,13 @@ def native(monkeypatch):
         monkeypatch.setenv(name, "")
     monkeypatch.setenv("WALDOFINDER_AGENT_VAULT", credentials.NATIVE_MODE)
     monkeypatch.setenv("OPENROUTER_API_KEY", credentials.PLACEHOLDER)
-    monkeypatch.setenv("WALDOFINDER_PROXY_CA_FILE", str(Path.home() / ".config/infisical/agent-vault-ca.pem"))
+    monkeypatch.setenv(
+        "WALDOFINDER_PROXY_CA_FILE", str(Path.home() / ".config/infisical/agent-vault-ca.pem")
+    )
     monkeypatch.setattr(Path, "read_bytes", lambda _: b"synthetic-public-ca")
-    monkeypatch.setattr(credentials, "CA_SHA256", hashlib.sha256(b"synthetic-public-ca").hexdigest())
+    monkeypatch.setattr(
+        credentials, "CA_SHA256", hashlib.sha256(b"synthetic-public-ca").hexdigest()
+    )
     return proxy
 
 
@@ -34,14 +39,20 @@ def test_native_session_ignores_cached_config_and_never_fetches_key(native, monk
     assert credentials.native_agent_vault()[0] == native
 
 
-@pytest.mark.parametrize("name,value", [
-    ("OPENROUTER_API_KEY", "fake-real-key"), ("OPENROUTER_API_KEY", ""),
-    ("WALDOFINDER_AGENT_VAULT", "unknown"), ("NO_PROXY", "*"), ("no_proxy", "openrouter.ai"),
-    ("HTTP_PROXY", "http://other:other@127.0.0.1:8283"),
-    ("HTTPS_PROXY", "http://fixture:fixture@unreviewed.invalid:8283"),
-    ("http_proxy", "http://other:other@127.0.0.1:8283"),
-    ("WALDOFINDER_PROXY_CA_FILE", "/unreviewed.pem"),
-])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("OPENROUTER_API_KEY", "fake-real-key"),
+        ("OPENROUTER_API_KEY", ""),
+        ("WALDOFINDER_AGENT_VAULT", "unknown"),
+        ("NO_PROXY", "*"),
+        ("no_proxy", "openrouter.ai"),
+        ("HTTP_PROXY", "http://other:other@127.0.0.1:8283"),
+        ("HTTPS_PROXY", "http://fixture:fixture@unreviewed.invalid:8283"),
+        ("http_proxy", "http://other:other@127.0.0.1:8283"),
+        ("WALDOFINDER_PROXY_CA_FILE", "/unreviewed.pem"),
+    ],
+)
 def test_bad_session_never_falls_back(native, monkeypatch, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(credentials.CredentialError):
@@ -61,12 +72,18 @@ def test_alternate_auth_stops_before_images_or_provider(native):
         provider.OpenRouter(Namespace(auth="environment", infisical_project="unreviewed"))
 
 
-@pytest.mark.parametrize("override", [
-    {"auth": "infisical"}, {"infisical_project": "unreviewed"},
-    {"infisical_env": "prod"}, {"infisical_path": "/other"},
-    {"infisical_secret": "OTHER"}, {"infisical_domain": "https://eu.infisical.com"},
-    {"vault_config": Path("/unreviewed")},
-])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"auth": "infisical"},
+        {"infisical_project": "unreviewed"},
+        {"infisical_env": "prod"},
+        {"infisical_path": "/other"},
+        {"infisical_secret": "OTHER"},
+        {"infisical_domain": "https://eu.infisical.com"},
+        {"vault_config": Path("/unreviewed")},
+    ],
+)
 def test_cli_rejects_overrides_before_any_request(native, monkeypatch, override):
     monkeypatch.setattr(cli.httpx, "Client", lambda **_k: pytest.fail("HTTP client started"))
     with pytest.raises(credentials.CredentialError):
@@ -74,7 +91,9 @@ def test_cli_rejects_overrides_before_any_request(native, monkeypatch, override)
 
 
 @pytest.mark.parametrize("status", [200, 401])
-def test_auth_check_uses_placeholder_and_suppresses_provider_body(native, monkeypatch, capsys, status):
+def test_auth_check_uses_placeholder_and_suppresses_provider_body(
+    native, monkeypatch, capsys, status
+):
     monkeypatch.setattr(cli, "native_agent_vault", lambda: (native, "/synthetic.pem"))
     monkeypatch.setattr(ssl, "create_default_context", lambda **_k: True)
     real_client = httpx.Client
@@ -84,7 +103,9 @@ def test_auth_check_uses_placeholder_and_suppresses_provider_body(native, monkey
         assert request.headers["Authorization"] == "Bearer " + credentials.PLACEHOLDER
         return httpx.Response(status, json={"data": {}, "diagnostic": "fake-provider-secret"})
 
-    monkeypatch.setattr(cli.httpx, "Client", lambda **_k: real_client(transport=httpx.MockTransport(handle)))
+    monkeypatch.setattr(
+        cli.httpx, "Client", lambda **_k: real_client(transport=httpx.MockTransport(handle))
+    )
     if status == 200:
         assert cli.execute(Namespace(command="vault-check")) == 0
     else:

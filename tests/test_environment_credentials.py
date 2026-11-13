@@ -16,7 +16,9 @@ def test_missing_environment_never_consults_a_cache_or_helper(monkeypatch):
     monkeypatch.delenv("WALDOFINDER_AGENT_VAULT", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(Path, "read_text", lambda *_a, **_k: pytest.fail("Cached config read"))
-    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("Credential helper started"))
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_a, **_k: pytest.fail("Credential helper started")
+    )
     with pytest.raises(credentials.CredentialError, match="OPENROUTER_API_KEY"):
         provider.OpenRouter(Namespace(timeout=10))
 
@@ -30,12 +32,16 @@ def test_invalid_unproxied_environment_fails_without_echoing_its_value(monkeypat
     assert "synthetic" not in str(error.value)
 
 
-def test_actual_image_client_uses_supplied_environment_with_no_implicit_proxy(tmp_path, monkeypatch):
+def test_actual_image_client_uses_supplied_environment_with_no_implicit_proxy(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv("WALDOFINDER_AGENT_VAULT", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-application-key")
     monkeypatch.setenv("HTTPS_PROXY", "http://unreviewed.invalid:1234")
     monkeypatch.setattr(Path, "read_text", lambda *_a, **_k: pytest.fail("Cached config read"))
-    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("Credential helper started"))
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_a, **_k: pytest.fail("Credential helper started")
+    )
     reference = tmp_path / "reference.png"
     Image.new("RGB", (2, 3), "green").save(reference)
     real_client = httpx.Client
@@ -46,13 +52,27 @@ def test_actual_image_client_uses_supplied_environment_with_no_implicit_proxy(tm
         assert request.headers["Authorization"] == "Bearer synthetic-application-key"
         body = json.loads(request.content)
         assert body["model"] == "synthetic/model"
-        assert len([part for part in body["messages"][0]["content"] if part["type"] == "image_url"]) == 4
+        assert (
+            len([part for part in body["messages"][0]["content"] if part["type"] == "image_url"])
+            == 4
+        )
         seen.append(request)
-        return httpx.Response(200, json={
-            "id": "synthetic-generation", "model": "synthetic/model", "usage": {},
-            "choices": [{"finish_reason": "stop", "message": {"content":
-                '{"decision":"absent","confidence":0.9,"reason":"Synthetic result"}'}}],
-        })
+        return httpx.Response(
+            200,
+            json={
+                "id": "synthetic-generation",
+                "model": "synthetic/model",
+                "usage": {},
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '{"decision":"absent","confidence":0.9,"reason":"Synthetic result"}'
+                        },
+                    }
+                ],
+            },
+        )
 
     def client(**settings):
         assert settings["trust_env"] is False and settings["follow_redirects"] is False
@@ -60,12 +80,19 @@ def test_actual_image_client_uses_supplied_environment_with_no_implicit_proxy(tm
         return real_client(**settings, transport=httpx.MockTransport(handle))
 
     monkeypatch.setattr(provider.httpx, "Client", client)
-    args = Namespace(timeout=10, reference=reference,
-                     distractor_references={"wenda": reference, "odlaw": reference},
-                     max_tokens=512, structured=False)
+    args = Namespace(
+        timeout=10,
+        reference=reference,
+        distractor_references={"wenda": reference, "odlaw": reference},
+        max_tokens=512,
+        structured=False,
+    )
     with_client = provider.OpenRouter(args)
     try:
-        assert with_client.classify("synthetic/model", Image.new("RGB", (4, 4)))["decision"] == "absent"
+        assert (
+            with_client.classify("synthetic/model", Image.new("RGB", (4, 4)))["decision"]
+            == "absent"
+        )
     finally:
         with_client.close()
     assert len(seen) == 1

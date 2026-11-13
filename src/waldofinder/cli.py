@@ -36,7 +36,9 @@ from .search import search_models
 
 
 def parser():
-    root = argparse.ArgumentParser(description="Compare VLMs on regional Waldo detection. Live requests read OPENROUTER_API_KEY from the application environment.")
+    root = argparse.ArgumentParser(
+        description="Compare VLMs on regional Waldo detection. Live requests read OPENROUTER_API_KEY from the application environment."
+    )
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="List 2026 OpenRouter vision models")
     commands.add_parser("vault-check", help="Check native Vault authentication without inference")
@@ -133,10 +135,18 @@ def execute(args):
         import ssl
 
         proxy, ca = native_agent_vault()
-        with httpx.Client(proxy=proxy, verify=ssl.create_default_context(cafile=ca),
-                          timeout=20, trust_env=False, follow_redirects=False) as client:
-            with client.stream("GET", "https://openrouter.ai/api/v1/key",
-                               headers={"Authorization": "Bearer " + PLACEHOLDER}) as response:
+        with httpx.Client(
+            proxy=proxy,
+            verify=ssl.create_default_context(cafile=ca),
+            timeout=20,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            with client.stream(
+                "GET",
+                "https://openrouter.ai/api/v1/key",
+                headers={"Authorization": "Bearer " + PLACEHOLDER},
+            ) as response:
                 if response.status_code != 200:
                     raise CredentialError("Native Vault authentication rejected.")
                 raw = bytearray()
@@ -146,7 +156,9 @@ def execute(args):
                         raise CredentialError("Native Vault response exceeded its limit.")
                 value = json.loads(raw)
                 if not isinstance(value, dict) or not isinstance(value.get("data"), dict):
-                    raise CredentialError("Native Vault returned an invalid authentication response.")
+                    raise CredentialError(
+                        "Native Vault returned an invalid authentication response."
+                    )
         print("Native Agent Vault authentication verified; no inference performed.")
         return 0
     if args.command == "serve":

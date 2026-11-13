@@ -31,20 +31,32 @@ def native_agent_vault():
             raise ValueError
         proxy = os.environ["HTTPS_PROXY"]
         parsed = urlsplit(proxy)
-        if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
-                or parsed.port != 8283 or not parsed.password
-                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
-                or os.environ.get("HTTP_PROXY") != proxy):
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname != "127.0.0.1"
+            or parsed.port != 8283
+            or not parsed.password
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or os.environ.get("HTTP_PROXY") != proxy
+        ):
             raise ValueError
         if any(os.environ.get(key, proxy) != proxy for key in ("http_proxy", "https_proxy")):
             raise ValueError
         ca = Path(os.environ["WALDOFINDER_PROXY_CA_FILE"])
         expected = Path.home() / ".config/infisical/agent-vault-ca.pem"
-        if ca != expected or ca.resolve() != ca or hashlib.sha256(ca.read_bytes()).hexdigest() != CA_SHA256:
+        if (
+            ca != expected
+            or ca.resolve() != ca
+            or hashlib.sha256(ca.read_bytes()).hexdigest() != CA_SHA256
+        ):
             raise ValueError
         return proxy, str(ca)
     except (OSError, ValueError, KeyError):
-        raise CredentialError("Expected the reviewed native Agent Vault session and placeholder.") from None
+        raise CredentialError(
+            "Expected the reviewed native Agent Vault session and placeholder."
+        ) from None
 
 
 def environment_key():
@@ -54,7 +66,9 @@ def environment_key():
         return PLACEHOLDER
     key = os.environ.get("OPENROUTER_API_KEY", "")
     if not key.strip() or any(char.isspace() or char == "\0" for char in key):
-        raise CredentialError("Set OPENROUTER_API_KEY in the application environment for live requests.")
+        raise CredentialError(
+            "Set OPENROUTER_API_KEY in the application environment for live requests."
+        )
     if key == PLACEHOLDER:
         raise CredentialError("The public placeholder requires its reviewed proxy session.")
     return key
