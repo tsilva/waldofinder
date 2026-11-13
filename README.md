@@ -32,7 +32,7 @@ The Vercel deployment is configured for [waldofinder.tsilva.eu](https://waldofin
 Production pushes pass secret scanning and exact-commit CI before key sync and
 deployment; direct Vercel Git builds are disabled.
 Visitors can run searches using the server's production OpenRouter key; keys
-stay in Infisical and Vercel Functions. Images and results are saved in each
+stay on the server in Vercel Functions. Images and results are saved in each
 visitor's browser, with JSON export. Keep the tab open while a search runs.
 
 Hosted limits: 3 MB / 40 megapixels per source image, 32 calls per model,
@@ -69,9 +69,8 @@ These standalone examples reveal no scene locations and stay ignored by Git.
 To supply your own, pass `--reference`, `--wenda-reference` and `--odlaw-reference`.
 See [test-image provenance](data/README.md).
 
-For live searches, first configure OpenRouter access through
-[Infisical](docs/usage.md#quick-start). The default uses an existing Infisical
-Agent Vault proxy; direct Infisical Secrets bindings are also supported.
+For live searches, supply `OPENROUTER_API_KEY` in the application environment.
+No secret-manager installation or cached login is required.
 Credentials stay on the Python server. Live searches send images to OpenRouter
 and the selected provider and incur API charges.
 

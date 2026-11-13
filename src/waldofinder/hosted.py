@@ -59,7 +59,7 @@ def bootstrap_payload():
         "image_detail": IMAGE_DETAIL,
         "reference_detail": "auto",
         "history": [],
-        "auth": "Infisical Production",
+        "auth": "Server environment",
         "replay_available": False,
         "reference": ref.manifest | {"url": "/waldo-reference.jpg"},
         "distractors": {

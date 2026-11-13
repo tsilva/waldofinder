@@ -45,14 +45,12 @@ user request to run the relevant test; creating this skill does not authorize a
 new benchmark. State the planned call count or upper bound and substantive cost
 uncertainty before a material new condition. An attempt cap is not a dollar cap.
 
-Use the existing Infisical credential workflow in `src/waldofinder/credentials.py`
-and repository access bindings when present. The default Agent Vault path reads
-only the loopback proxy URL and public CA from its owner-only configuration and
-uses a placeholder key; real OpenRouter keys remain inside the proxy. Keep TLS
-verification enabled. Diagnose failures with status, timing and presence checks,
-without dumping configuration, provider error bodies or logs. Native OpenAI
-controls need their own authorized, current credential path; never recover a key
-from chat history or save one with experiment artifacts.
+Use the application's supplied environment; never fetch credentials or consult
+cached logins for a benchmark. Preserve explicit proxied-session guards and TLS
+verification. Diagnose failures with status, timing and presence checks without
+dumping configuration, provider bodies or logs. Native OpenAI controls need
+their own authorized credential path; never recover keys from chat history or
+save them with experiment artifacts.
 
 Preview/preparation must succeed before live inference. For a new multi-model
 or large-image condition, validate a small representative image-bearing request

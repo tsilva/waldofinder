@@ -1,14 +1,12 @@
 import base64
 import hashlib
 import json
-from argparse import Namespace
 from io import BytesIO
 
 import httpx
 import pytest
 from PIL import Image
 
-from waldofinder.credentials import CredentialError, agent_vault, infisical_key
 from waldofinder.provider import (
     LOCALIZATION_PROMPT,
     LOCALIZATION_SCHEMA,
@@ -268,47 +266,6 @@ def test_invalid_completion_retains_usage():
     assert error.value.usage["cost"] == 1 and error.value.generation_id == "gen"
     assert error.value.finish_reason == "length"
     client.close()
-
-
-def test_vault_refuses_insecure_files_and_nonloopback_proxy(tmp_path):
-    config = tmp_path / "config"
-    ca = tmp_path / "ca.pem"
-    ca.write_text("public certificate")
-    config.write_text(
-        f"OPENROUTER_PROXY_URL=http://user:secret@127.0.0.1:8283\nOPENROUTER_CA_FILE={ca}"
-    )
-    config.chmod(0o644)
-    with pytest.raises(CredentialError):
-        agent_vault(config)
-    config.chmod(0o600)
-    assert agent_vault(config)[1] == str(ca)
-    config.write_text(config.read_text().replace("127.0.0.1", "evil.test"))
-    with pytest.raises(CredentialError) as error:
-        agent_vault(config)
-    assert "secret" not in str(error.value)
-
-
-def test_infisical_only_named_secret_and_redacted_failure(monkeypatch):
-    seen = []
-
-    def run(args, **kwargs):
-        seen.extend(args)
-        return Namespace(
-            returncode=0,
-            stdout=json.dumps([{"secretKey": "OPENROUTER_API_KEY", "secretValue": "<not found>"}]),
-        )
-
-    monkeypatch.setattr("waldofinder.credentials.subprocess.run", run)
-    with pytest.raises(CredentialError):
-        infisical_key(
-            "00000000-0000-0000-0000-000000000000",
-            "dev",
-            "/",
-            "OPENROUTER_API_KEY",
-            "https://app.infisical.com",
-        )
-    assert "--expand=false" in seen and "--include-imports=false" in seen
-    assert "--secret-overriding=false" in seen
 
 
 def test_reasoning_models_do_not_receive_unsupported_temperature():

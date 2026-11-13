@@ -1,87 +1,60 @@
-"""Infisical-only credentials, kept in memory; no plaintext exports."""
+"""Application environment and explicit proxied-session validation."""
 
-import json
 import os
-import stat
-import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import UUID
+
+NATIVE_MODE = "waldofinder-native-v1"
+PLACEHOLDER = "waldofinder_openrouter_placeholder"
+CA_SHA256 = "d18b13df74a7fcaf752cc2ee2c1eaf18d3e03abd89630ef611b2b0a7a765005a"
 
 
 class CredentialError(RuntimeError):
     pass
 
 
-def infisical_key(project: str, environment: str, path: str, name: str, domain: str):
-    try:
-        UUID(project)
-    except ValueError:
-        raise CredentialError("Infisical project must be a UUID.") from None
-    if domain not in {"https://app.infisical.com", "https://eu.infisical.com"}:
-        raise CredentialError("Use an official Infisical cloud domain.")
-    try:
-        result = subprocess.run(
-            [
-                "infisical",
-                "secrets",
-                "get",
-                name,
-                "--output",
-                "json",
-                "--projectId",
-                project,
-                "--env",
-                environment,
-                "--path",
-                path,
-                "--domain",
-                domain,
-                "--expand=false",
-                "--include-imports=false",
-                "--secret-overriding=false",
-                "--silent",
-                "--telemetry=false",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode:
-            raise ValueError
-        rows = json.loads(result.stdout)
-        if len(rows) != 1 or rows[0]["secretKey"] != name:
-            raise ValueError
-        value = rows[0]["secretValue"]
-        if not isinstance(value, str) or not value.strip() or value == "<not found>":
-            raise ValueError
-        return value
-    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
-        raise CredentialError(
-            "Infisical secret unavailable; check login and secret binding."
-        ) from None
+def native_mode():
+    value = os.environ.get("WALDOFINDER_AGENT_VAULT")
+    if value not in (None, "", NATIVE_MODE):
+        raise CredentialError("Unreviewed native Agent Vault mode.")
+    return value == NATIVE_MODE
 
 
-def agent_vault(path: Path):
-    """Read only the proxy URL and public CA from an existing owner-only config."""
+def native_agent_vault():
+    """Use only the fresh native session; never consult a cached config or key."""
     try:
-        info = path.stat()
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        import hashlib
+
+        if not native_mode() or os.environ.get("OPENROUTER_API_KEY") != PLACEHOLDER:
             raise ValueError
-        values = {}
-        for line in path.read_text().splitlines():
-            key, sep, value = line.partition("=")
-            if sep and key in {"OPENROUTER_PROXY_URL", "OPENROUTER_CA_FILE"}:
-                values[key] = value.strip().strip("\"'")
-        proxy, ca = values["OPENROUTER_PROXY_URL"], values["OPENROUTER_CA_FILE"]
-        url = urlsplit(proxy)
-        if url.scheme != "http" or url.hostname != "127.0.0.1" or not url.port:
+        if os.environ.get("NO_PROXY") or os.environ.get("no_proxy"):
             raise ValueError
-        if not Path(ca).is_file():
+        proxy = os.environ["HTTPS_PROXY"]
+        parsed = urlsplit(proxy)
+        if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+                or parsed.port != 8283 or not parsed.password
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+                or os.environ.get("HTTP_PROXY") != proxy):
             raise ValueError
-        return proxy, ca
+        if any(os.environ.get(key, proxy) != proxy for key in ("http_proxy", "https_proxy")):
+            raise ValueError
+        ca = Path(os.environ["WALDOFINDER_PROXY_CA_FILE"])
+        expected = Path.home() / ".config/infisical/agent-vault-ca.pem"
+        if ca != expected or ca.resolve() != ca or hashlib.sha256(ca.read_bytes()).hexdigest() != CA_SHA256:
+            raise ValueError
+        return proxy, str(ca)
     except (OSError, ValueError, KeyError):
-        raise CredentialError(
-            "Agent Vault config unavailable; check proxy URL, CA and permissions."
-        ) from None
+        raise CredentialError("Expected the reviewed native Agent Vault session and placeholder.") from None
+
+
+def environment_key():
+    """Never start a credential helper or consult a cached configuration."""
+    if native_mode():
+        native_agent_vault()
+        return PLACEHOLDER
+    key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not key.strip() or any(char.isspace() or char == "\0" for char in key):
+        raise CredentialError("Set OPENROUTER_API_KEY in the application environment for live requests.")
+    if key == PLACEHOLDER:
+        raise CredentialError("The public placeholder requires its reviewed proxy session.")
+    return key

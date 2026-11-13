@@ -8,7 +8,7 @@
 uv --config-file uv.toml run waldofinder serve --port auto
 ```
 
-Open the printed local URL. The dashboard uses your existing Infisical connection;
+Open the printed local URL. The dashboard uses the supplied application environment;
 credentials stay on the Python server. Every live call receives separate Waldo,
 Wenda and Odlaw examples followed by the search crop. Instructions exclude the two
 distractors while accounting for partial occlusion. Search crops request `original`
@@ -102,7 +102,7 @@ writes. This describes the local `serve` command. The Vercel adapter below uses 
 separate request lifecycle and browser-local history.
 
 For another image, pass `--image /path/to/scene.png`. The `serve` command accepts
-the same Infisical binding options as `run`, plus `--runs-dir` for a different local
+`--runs-dir` for a different local
 experiment folder. `--reference /path/to/waldo.png` selects the appearance exemplar
 (default `data/waldo-reference.jpg`). `--wenda-reference` and `--odlaw-reference`
 select the distractor files (defaults `data/wenda-reference.png` and
@@ -170,14 +170,14 @@ to prepare assets, then `uv --config-file uv.toml run python scripts/serve_hoste
 --port auto --fixture` for an explicit synthetic, zero-inference UI check.
 
 Production access uses an environment-injected `OPENROUTER_API_KEY`; there is no
-fallback to a developer's Agent Vault or another project's key. The key is delivered
+fallback to a developer's credentials or another project's key. The key is delivered
 from an isolated Infisical Production vault by the ordered GitHub Actions workflow.
 See [production delivery](production-delivery.md) for pinned identities and setup.
 
 ## Quick start
 
 Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), and access to OpenRouter
-through [Infisical](https://infisical.com/docs/cli/overview).
+through the application environment.
 
 ```bash
 uv --config-file uv.toml sync --locked
@@ -198,28 +198,10 @@ uv --config-file uv.toml run waldofinder run data/beach.png --strategy binary --
   --model google/gemini-4-argon --max-requests 32 --output runs/binary
 ```
 
-The default authentication uses an existing Infisical Agent Vault proxy configured
-by an owner-only `~/.config/agentbridge/.env` containing `OPENROUTER_PROXY_URL` and
-`OPENROUTER_CA_FILE`. The proxy must allow OpenRouter chat-completion requests.
-`--vault-config PATH` selects another config. OpenRouter's real key stays in
-Infisical; proxy credentials are used only in memory. Public model discovery
-connects directly to OpenRouter without credentials.
-
-For a normal Infisical Secrets Management project, log into the Infisical CLI,
-store an OpenRouter key there, and select its binding explicitly:
-
-```bash
-infisical login
-uv --config-file uv.toml run waldofinder run data/beach.png --tiles 4 \
-  --model google/gemini-4-argon --auth infisical \
-  --infisical-project YOUR_PROJECT_UUID --infisical-env dev \
-  --infisical-path / --infisical-secret OPENROUTER_API_KEY
-```
-
-Use `--infisical-domain https://eu.infisical.com` for EU Cloud. Only the named
-secret is fetched, with expansion, imports and personal overrides disabled. Keys
-are never exported to files. Live runs send cropped images to OpenRouter and its
-selected model provider and incur API charges. Offline `preview` needs no login.
+Live requests read `OPENROUTER_API_KEY` from the supplied application environment.
+No cached login or credential helper is consulted. Explicit protected sessions
+retain their placeholder, proxy and TLS checks. Missing configuration fails
+before model requests; offline preview needs no credentials.
 
 ## Search strategies
 
@@ -458,8 +440,7 @@ read ordering, saved-run selection and storage/network failure handling without
 provider requests.
 
 API references: [OpenRouter image inputs](https://openrouter.ai/docs/guides/overview/multimodal/image-understanding),
-[structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs),
-and [Infisical secrets CLI](https://infisical.com/docs/cli/commands/secrets).
+[structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs).
 
 ### Lighthouse audits
 
@@ -521,7 +502,7 @@ uv --config-file uv.toml run python -m experiments.openai_controls \
 
 Preparation/summarization is offline. `--live` enables paid calls and reads a
 short-lived OpenAI key through a hidden terminal prompt; it does not save the key
-or change the app's Infisical/OpenRouter authentication. Five repetitions per crop,
+or change the app's OpenRouter authentication. Five repetitions per crop,
 two arms, no automatic retries, 30 calls maximum per fresh experiment. Native
 usage-based dollar estimates are distinguished from OpenRouter-reported cost.
 `experiments.review_openai_controls FOLDER` proposes circle bounds and builds a
@@ -544,7 +525,7 @@ uv --config-file uv.toml run python -m experiments.bsp_scenes \
   --output runs/gemini-bsp-scenes-new
 ```
 
-Add `--live` for paid calls through the existing Infisical proxy. The first pending
+Add `--live` for paid calls using the supplied application environment. The first pending
 scene runs before releasing the rest; if all its calls fail, submissions stop.
 Up to eight scenes and 32 inference calls can overlap. A separate 5.8 MB budget
 limits concurrent request bodies until response headers arrive, protecting the

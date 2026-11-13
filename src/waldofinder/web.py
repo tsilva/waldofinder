@@ -138,9 +138,7 @@ class Handler(BaseHTTPRequestHandler):
                     "reference_detail": REFERENCE_DETAIL,
                     "sample": sample,
                     "history": app.history(),
-                    "auth": "Infisical Agent Vault"
-                    if app.args.auth == "agent-vault"
-                    else "Infisical Secrets",
+                    "auth": "Server environment",
                     "replay_available": app.sample_run() is not None,
                 }
             )

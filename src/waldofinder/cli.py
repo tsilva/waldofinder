@@ -12,7 +12,13 @@ import httpx
 from PIL import Image, ImageOps
 
 from . import __version__
-from .credentials import CredentialError
+from .credentials import (
+    PLACEHOLDER,
+    CredentialError,
+    environment_key,
+    native_agent_vault,
+    native_mode,
+)
 from .geometry import Region, grid
 from .provider import (
     IMAGE_DETAIL,
@@ -30,9 +36,10 @@ from .search import search_models
 
 
 def parser():
-    root = argparse.ArgumentParser(description="Compare VLMs on regional Waldo detection.")
+    root = argparse.ArgumentParser(description="Compare VLMs on regional Waldo detection. Live requests read OPENROUTER_API_KEY from the application environment.")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="List 2026 OpenRouter vision models")
+    commands.add_parser("vault-check", help="Check native Vault authentication without inference")
     ui = commands.add_parser("serve", help="Open the local live experiment dashboard")
     ui.add_argument("--port", default="auto")
     ui.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE)
@@ -42,13 +49,6 @@ def parser():
         )
     ui.add_argument("--image", type=Path, default=Path("data/beach.png"))
     ui.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    ui.add_argument("--auth", choices=("agent-vault", "infisical"), default="agent-vault")
-    ui.add_argument("--vault-config", type=Path, default=Path("~/.config/agentbridge/.env"))
-    ui.add_argument("--infisical-project")
-    ui.add_argument("--infisical-env", default="dev")
-    ui.add_argument("--infisical-path", default="/")
-    ui.add_argument("--infisical-secret", default="OPENROUTER_API_KEY")
-    ui.add_argument("--infisical-domain", default="https://app.infisical.com")
     for name in ("run", "preview"):
         p = commands.add_parser(
             name, help="Run paid requests" if name == "run" else "Export crops offline"
@@ -102,13 +102,6 @@ def parser():
         p.add_argument(
             "--structured", action="store_true", help="Require native JSON schema support"
         )
-        p.add_argument("--auth", choices=("agent-vault", "infisical"), default="agent-vault")
-        p.add_argument("--vault-config", type=Path, default=Path("~/.config/agentbridge/.env"))
-        p.add_argument("--infisical-project")
-        p.add_argument("--infisical-env", default="dev")
-        p.add_argument("--infisical-path", default="/")
-        p.add_argument("--infisical-secret", default="OPENROUTER_API_KEY")
-        p.add_argument("--infisical-domain", default="https://app.infisical.com")
     return root
 
 
@@ -128,6 +121,34 @@ def validate(args):
 
 
 def execute(args):
+    if getattr(args, "auth", "environment") != "environment" or any(
+        key.startswith("infisical_") or key == "vault_config" for key in vars(args)
+    ):
+        raise CredentialError("Authentication must come from the supplied application environment.")
+    if native_mode():
+        native_agent_vault()
+    if args.command == "run":
+        environment_key()
+    if args.command == "vault-check":
+        import ssl
+
+        proxy, ca = native_agent_vault()
+        with httpx.Client(proxy=proxy, verify=ssl.create_default_context(cafile=ca),
+                          timeout=20, trust_env=False, follow_redirects=False) as client:
+            with client.stream("GET", "https://openrouter.ai/api/v1/key",
+                               headers={"Authorization": "Bearer " + PLACEHOLDER}) as response:
+                if response.status_code != 200:
+                    raise CredentialError("Native Vault authentication rejected.")
+                raw = bytearray()
+                for chunk in response.iter_bytes():
+                    raw.extend(chunk)
+                    if len(raw) > 65536:
+                        raise CredentialError("Native Vault response exceeded its limit.")
+                value = json.loads(raw)
+                if not isinstance(value, dict) or not isinstance(value.get("data"), dict):
+                    raise CredentialError("Native Vault returned an invalid authentication response.")
+        print("Native Agent Vault authentication verified; no inference performed.")
+        return 0
     if args.command == "serve":
         from .web import serve
 

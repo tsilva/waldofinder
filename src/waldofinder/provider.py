@@ -4,7 +4,6 @@ import base64
 import hashlib
 import json
 import math
-import os
 import ssl
 import time
 from datetime import UTC, datetime
@@ -12,7 +11,7 @@ from io import BytesIO
 
 import httpx
 
-from .credentials import agent_vault, infisical_key
+from .credentials import CredentialError, environment_key, native_agent_vault, native_mode
 from .geometry import validate_bbox
 from .reference import DEFAULT_REFERENCE, distractor_content, load_distractors, load_reference
 
@@ -201,7 +200,11 @@ def model_is_2026(model):
 
 
 def public_models():
-    with httpx.Client(timeout=30, trust_env=False) as client:
+    settings = {"timeout": 30, "trust_env": False}
+    if native_mode():
+        proxy, ca = native_agent_vault()
+        settings.update(proxy=proxy, verify=ssl.create_default_context(cafile=ca))
+    with httpx.Client(**settings) as client:
         response = client.get("https://openrouter.ai/api/v1/models")
         response.raise_for_status()
         return {m["id"]: m for m in response.json()["data"] if model_is_2026(m)}
@@ -209,6 +212,15 @@ def public_models():
 
 class OpenRouter:
     def __init__(self, args):
+        if getattr(args, "auth", "environment") != "environment" or any(
+            key.startswith("infisical_") or key == "vault_config" for key in vars(args)
+        ):
+            raise CredentialError("Use the supplied application environment for authentication.")
+        key = environment_key()
+        settings = {"timeout": args.timeout, "trust_env": False, "follow_redirects": False}
+        if native_mode():
+            proxy, ca = native_agent_vault()
+            settings.update(proxy=proxy, verify=ssl.create_default_context(cafile=ca))
         self.localization = getattr(args, "strategy", "grid") == "bbox"
         prompt, version = prompt_for_strategy(getattr(args, "strategy", "grid"))
         self.prompt = getattr(args, "detection_prompt", prompt)
@@ -216,25 +228,6 @@ class OpenRouter:
         self.reference = load_reference(getattr(args, "reference", DEFAULT_REFERENCE))
         self.reference_data_url = self.reference.data_url
         self.distractors = load_distractors(args)
-        settings = {"timeout": args.timeout, "trust_env": False}
-        if args.auth == "agent-vault":
-            proxy, ca = agent_vault(args.vault_config.expanduser())
-            settings.update(proxy=proxy, verify=ssl.create_default_context(cafile=ca))
-            key = "infisical-agent-vault"
-        elif args.auth == "environment":
-            key = os.environ.get("OPENROUTER_API_KEY", "")
-            if not key:
-                raise ValueError("Production inference is not configured.")
-        else:
-            if not args.infisical_project:
-                raise ValueError("--infisical-project is required with --auth infisical")
-            key = infisical_key(
-                args.infisical_project,
-                args.infisical_env,
-                args.infisical_path,
-                args.infisical_secret,
-                args.infisical_domain,
-            )
         self.client = httpx.Client(
             **settings, headers={"Authorization": f"Bearer {key}", "X-Title": "waldofinder"}
         )
