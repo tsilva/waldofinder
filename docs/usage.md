@@ -203,6 +203,9 @@ No cached login or credential helper is consulted. Explicit protected sessions
 retain their placeholder, proxy and TLS checks. Missing configuration fails
 before model requests; offline preview needs no credentials.
 
+An agent credential session requires the matching scoped connection. An
+unrelated session stops before opening an OpenRouter client.
+
 ## Search strategies
 
 **Grid:** `--tiles N` creates exactly N regions covering the whole image. Each

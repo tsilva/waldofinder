@@ -17,6 +17,10 @@ def native_mode():
     value = os.environ.get("WALDOFINDER_AGENT_VAULT")
     if value not in (None, "", NATIVE_MODE):
         raise CredentialError("Unreviewed native Agent Vault mode.")
+    if value != NATIVE_MODE and any(
+        name in os.environ for name in ("INFISICAL_AGENT_VAULT_URL", "RUNBOX_POLICY")
+    ):
+        raise CredentialError("Select the reviewed Waldofinder proxy mode for agent access.")
     return value == NATIVE_MODE
 
 

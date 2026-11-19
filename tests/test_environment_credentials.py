@@ -32,6 +32,29 @@ def test_invalid_unproxied_environment_fails_without_echoing_its_value(monkeypat
     assert "synthetic" not in str(error.value)
 
 
+@pytest.mark.parametrize("marker", ["INFISICAL_AGENT_VAULT_URL", "RUNBOX_POLICY"])
+def test_other_agent_sessions_cannot_use_standalone_key_or_public_catalog(monkeypatch, marker):
+    monkeypatch.delenv("WALDOFINDER_AGENT_VAULT", raising=False)
+    monkeypatch.setenv(marker, "synthetic-unreviewed-session")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-direct-key")
+    monkeypatch.setattr(
+        provider.httpx, "Client", lambda **_settings: pytest.fail("HTTP client was opened")
+    )
+    for operation in (lambda: provider.OpenRouter(Namespace(timeout=10)), provider.public_models):
+        with pytest.raises(credentials.CredentialError, match="reviewed Waldofinder proxy mode"):
+            operation()
+
+
+def test_reviewed_agent_session_still_selects_only_the_placeholder(monkeypatch):
+    monkeypatch.setenv("WALDOFINDER_AGENT_VAULT", credentials.NATIVE_MODE)
+    monkeypatch.setenv("INFISICAL_AGENT_VAULT_URL", "https://app.infisical.com")
+    monkeypatch.setenv("OPENROUTER_API_KEY", credentials.PLACEHOLDER)
+    validated = []
+    monkeypatch.setattr(credentials, "native_agent_vault", lambda: validated.append(True))
+    assert credentials.environment_key() == credentials.PLACEHOLDER
+    assert validated == [True]
+
+
 def test_actual_image_client_uses_supplied_environment_with_no_implicit_proxy(
     tmp_path, monkeypatch
 ):
