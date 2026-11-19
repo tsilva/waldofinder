@@ -45,6 +45,20 @@ def test_other_agent_sessions_cannot_use_standalone_key_or_public_catalog(monkey
             operation()
 
 
+def test_offline_preview_does_not_need_a_provider_route(tmp_path, monkeypatch):
+    monkeypatch.delenv("WALDOFINDER_AGENT_VAULT", raising=False)
+    monkeypatch.setenv("INFISICAL_AGENT_VAULT_URL", "https://app.infisical.com")
+    monkeypatch.setattr(
+        provider.httpx, "Client", lambda **_settings: pytest.fail("HTTP client was opened")
+    )
+    image = tmp_path / "synthetic.png"
+    Image.new("RGB", (17, 11)).save(image)
+    output = tmp_path / "preview"
+    args = cli.parser().parse_args(["preview", str(image), "--tiles", "7", "--output", str(output)])
+    assert cli.execute(args) == 0
+    assert len(json.loads((output / "regions.json").read_text())) == 7
+
+
 def test_reviewed_agent_session_still_selects_only_the_placeholder(monkeypatch):
     monkeypatch.setenv("WALDOFINDER_AGENT_VAULT", credentials.NATIVE_MODE)
     monkeypatch.setenv("INFISICAL_AGENT_VAULT_URL", "https://app.infisical.com")

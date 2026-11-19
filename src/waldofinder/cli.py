@@ -127,7 +127,7 @@ def execute(args):
         key.startswith("infisical_") or key == "vault_config" for key in vars(args)
     ):
         raise CredentialError("Authentication must come from the supplied application environment.")
-    if native_mode():
+    if args.command != "preview" and native_mode():
         native_agent_vault()
     if args.command == "run":
         environment_key()
