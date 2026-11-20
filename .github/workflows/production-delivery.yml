@@ -117,7 +117,7 @@ jobs:
     with:
       project_id: prj_9JcFTUe60qgFgxkAazfm01UcpXnA
       project_name: waldofinder
-      production_domains: '["waldofinder.tsilva.eu","waldofinder.vercel.app"]'
+      production_domains: '["waldofinder.tsilva.eu"]'
       promote: ${{ !inputs.stage_prebuilt }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
